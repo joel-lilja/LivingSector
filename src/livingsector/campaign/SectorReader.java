@@ -19,6 +19,12 @@ import org.lwjgl.util.vector.Vector2f;
 public final class SectorReader {
     private SectorReader() { }
 
+    public static boolean peaceful(String first, String second) {
+        FactionAPI a = Global.getSector().getFaction(first);
+        FactionAPI b = Global.getSector().getFaction(second);
+        return a != null && b != null && !a.isHostileTo(second) && !b.isHostileTo(first);
+    }
+
     public static boolean isPort(MarketAPI market) {
         if (market == null || !market.isInEconomy() || market.isHidden()
                 || market.isPlanetConditionMarketOnly() || market.getSize() < 3) return false;

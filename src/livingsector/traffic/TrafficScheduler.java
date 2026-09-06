@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.Random;
 import livingsector.model.SectorSnapshot;
 
-/** Saved scheduling state, independent of Starsector. Called at most once per campaign day. */
+/** Saved scheduling state, independent of Starsector. Called once per planning pass. */
 public final class TrafficScheduler {
     private static final class TypeState {
         double target, nextReroll, lastBaseTarget = -1;
@@ -18,9 +18,14 @@ public final class TrafficScheduler {
 
     public TrafficPlan evaluate(TrafficPolicy policy, SectorSnapshot sector,
                                 List<TrafficContext.Route> active, double day, Random random) {
+        return evaluate(policy, sector, active, day, 1, random);
+    }
+
+    public TrafficPlan evaluate(TrafficPolicy policy, SectorSnapshot sector,
+                                List<TrafficContext.Route> active, double day, double intervalDays, Random random) {
         TrafficBudget budget = policy.budget(sector);
         TypeState state = state(policy.getId());
-        // A conquest, colonization or config change can change the target immediately.
+        // Recalculate a changed target at the next planning pass.
         if (day >= state.nextReroll || state.lastBaseTarget != budget.target) {
             state.target = Math.min(budget.hardLimit, Math.max(0,
                     budget.target * (1 + (random.nextDouble() * 2 - 1) * budget.variation)));
@@ -32,7 +37,8 @@ public final class TrafficScheduler {
         int count = 0;
         for (TrafficContext.Route route : active) if (policy.getId().equals(route.typeId)) count++;
         if (count >= budget.hardLimit || random.nextDouble()
-                >= TrafficBudget.spawnChance(count, state.target, budget.dailyChance)) return null;
+                >= TrafficBudget.intervalChance(
+                        TrafficBudget.spawnChance(count, state.target, budget.dailyChance), intervalDays)) return null;
         TrafficContext context = new TrafficContext(sector, active, day,
                 budget.originCooldownDays, state.lastDepartures);
         TrafficPlan plan = policy.plan(context, random);

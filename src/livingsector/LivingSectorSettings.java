@@ -8,6 +8,7 @@ import org.json.JSONObject;
 public final class LivingSectorSettings {
     public boolean enabled = true, debugLogging = false;
     public int globalFleetLimit = 40;
+    public double planningIntervalDays = 5, maintenanceIntervalDays = 2;
     public final VipTrafficPolicy.Config vip = new VipTrafficPolicy.Config();
 
     public static LivingSectorSettings load() throws Exception {
@@ -16,6 +17,8 @@ public final class LivingSectorSettings {
         settings.enabled = root.getBoolean("enabled");
         settings.debugLogging = root.getBoolean("debugLogging");
         settings.globalFleetLimit = root.getInt("globalFleetLimit");
+        settings.planningIntervalDays = root.optDouble("planningIntervalDays", 5);
+        settings.maintenanceIntervalDays = root.optDouble("maintenanceIntervalDays", 2);
         JSONObject json = root.getJSONObject("vip");
         VipTrafficPolicy.Config vip = settings.vip;
         vip.enabled = json.getBoolean("enabled");
@@ -32,7 +35,8 @@ public final class LivingSectorSettings {
         vip.maximumTripDays = (float) json.getDouble("maximumTripDays");
         vip.boardingDays = (float) json.getDouble("boardingDays");
         vip.variant = json.getString("variant");
-        if (settings.globalFleetLimit < 1 || vip.minimumMarketSize < 1
+        if (settings.globalFleetLimit < 1 || !positive(settings.planningIntervalDays)
+                || !positive(settings.maintenanceIntervalDays) || vip.minimumMarketSize < 1
                 || !positive(vip.marketsPerAdditionalFleet) || !positive(vip.maximumTarget)
                 || !positive(vip.maximumTripDays) || !Double.isFinite(vip.boardingDays)
                 || vip.boardingDays < 0 || vip.maximumTripDays <= vip.boardingDays

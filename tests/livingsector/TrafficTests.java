@@ -18,6 +18,12 @@ public final class TrafficTests {
     private static int checks;
 
     public static void main(String[] args) {
+        check(Math.abs(TrafficBudget.intervalChance(.35, 5) - (1 - Math.pow(.65, 5))) < 1e-12,
+                "Planning probability accounts for the configured interval");
+        check(TrafficBudget.intervalChance(0, 5) == 0 && TrafficBudget.intervalChance(1, 5) == 1,
+                "Zero and certain probabilities remain exact");
+        check(Math.abs(TrafficBudget.intervalChance(.35, 1) - .35) < 1e-12,
+                "One-day interval preserves the previous chance");
         diplomacyAndEligibility();
         cooldownAndDuplicates();
         budgetsAndScheduling();

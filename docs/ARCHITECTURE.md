@@ -22,7 +22,7 @@ flowchart LR
 | Component | Responsibility |
 | --- | --- |
 | `LivingSectorPlugin` | Load settings, register built-in policies, install exactly one campaign manager. |
-| `SectorReader` | Read eligible live markets and current faction hostility once per campaign day. |
+| `SectorReader` | Read full snapshots on demand; provide direct endpoint hostility checks for maintenance. |
 | `SectorSnapshot` | Immutable input: colony identity, owner, size, stability, location, planet/station status, and diplomacy. |
 | `TrafficPolicy` | Calculate a budget from sector state and propose a suitable route and fleet. |
 | `TrafficContext` | Expose snapshot, active routes, current simulation day, and per-policy origin cooldown checks. |
@@ -32,7 +32,7 @@ flowchart LR
 | `TrafficRegistry` | Register policies by unique ID without changing the manager. |
 | `CivilianFleetFactory` | Validate live endpoints and create a normal civilian fleet from a plan. |
 | `TrafficJourney` | Monitor route safety, divert when necessary, and retire stale fleets. |
-| `TrafficManager` | Run one daily update, share global capacity fairly, track journeys, expose diagnostics. |
+| `TrafficManager` | Run independent planning and maintenance cadences, share capacity fairly, track journeys, expose diagnostics. |
 
 ## Add another traffic type
 
@@ -49,7 +49,7 @@ flowchart LR
 
 Another mod can register a policy from its own `onApplicationLoad()` using the same registry and a dependency on `living_sector`. Policy registrations live for the application session and must not retain campaign objects or save-specific state.
 
-The shared scheduler currently permits at most one proposal per policy per campaign day. Each type has independent target state and origin cooldowns. All types compete for the global cap in randomized order. Cooldowns are consumed only after a fleet is successfully placed in the campaign. Duplicate routes are forbidden within a type, in the same direction; simultaneous A→B and B→A trips are allowed.
+The shared scheduler currently permits at most one proposal per policy per planning pass (five campaign days by default). Each type has independent target state and origin cooldowns. A daily probability `p` becomes `1 - (1 - p)^intervalDays` for the planning window. This represents at least one opportunity, not the expected count of daily spawns: throughput is limited to one fleet per type per pass. All types compete for the global cap in randomized order. Cooldowns are consumed only after a fleet is successfully placed in the campaign. Duplicate routes are forbidden within a type, in the same direction; simultaneous A→B and B→A trips are allowed.
 
 For algorithms that need additional inputs, extend `SectorSnapshot` and populate them in `SectorReader`. For example, commodity availability, shortages, industry tags, accessibility, or local threat observations can become snapshot fields. Keep live `MarketAPI` and fleet references in `campaign/`, so decisions remain testable without Starsector. The current snapshot intentionally does not contain those future inputs yet.
 
@@ -57,22 +57,29 @@ For algorithms that need additional inputs, extend `SectorSnapshot` and populate
 
 `TrafficManager` is a persistent `EveryFrameScript`. It stores its RNG, simulation day, scheduler state, tracked journeys, and error retry times. It is installed only if `SectorAPI.hasScript(TrafficManager.class)` is false. The normal game save mechanism serializes that state, and loading does not create another copy.
 
-Policies, registry entries, settings, and sector snapshots are not part of saved campaign state. They are reconstructed at application startup or each observation tick. Saved journeys hold the fleet reference, traffic ID, endpoint IDs, original expiry time, and diversion/retirement flags. Market IDs are resolved against the current economy, so ownership changes and removed markets are visible.
+Policies, registry entries, settings, and sector snapshots are not part of saved campaign state. They are reconstructed at application startup or on demand within an update. There is no snapshot cache spanning updates, so emergency routing never relies on the previous planning pass. Saved journeys hold the fleet reference, traffic ID, endpoint IDs, original expiry time, and diversion/retirement flags. Market IDs are resolved against the current economy, so ownership changes and removed markets are visible.
 
 Do not casually rename persisted classes or fields, especially `TrafficManager`, `TrafficJourney`, `TrafficScheduler`, and its `TypeState`. Add migration or defaults when evolving their saved structure. This is a first prototype, not a promise of save compatibility across arbitrary future schema changes.
 
-Native fleet AI performs departure, jump-point navigation, threat avoidance, and arrival/despawn. There are no custom per-fleet scripts or custom assignment callbacks to serialize. Once each day, the journey monitor checks current relations in both directions. A dangerous route returns to its safe origin, or uses the nearest safe port by hyperspace distance if returning is impossible. A diversion does not reset the maximum lifetime.
+Native fleet AI performs departure, jump-point navigation, threat avoidance, and arrival/despawn. There are no custom per-fleet scripts or custom assignment callbacks to serialize. Every two campaign days by default, the journey monitor reads the two live endpoints and checks current relations in both directions. Only if a safe return to the origin is impossible does it request a full snapshot to find another port. A dangerous route returns to its safe origin, or uses the nearest safe port by hyperspace distance if returning is impossible. A diversion does not reset the maximum lifetime.
 
-Destroyed and arrived fleets release capacity on the next daily update. Timeout/no-safe-port cleanup waits while a fleet is visible or fighting. Those waiting fleets continue to count toward capacity. Setting global `enabled` to false stops new departures while maintaining existing journeys.
+Destroyed and arrived fleets release capacity on the next maintenance pass; planning also prunes native arrivals before checking the cap. Timeout/no-safe-port cleanup waits while a fleet is visible or fighting. Those waiting fleets continue to count toward capacity. Setting global `enabled` to false stops new departures while maintaining existing journeys.
 
 ## Runtime bounds and failures
 
-- No scans while paused. One market snapshot and journey update per campaign day.
+- No scans while paused. Planning defaults to every five days; maintenance defaults to every two. Both are configurable positive intervals.
+- Healthy journeys and return-to-origin diversions use direct market lookups and a few relation checks, without a sector scan. Maintenance cost is proportional to active fleet count and bounded by the fleet cap.
+- A snapshot is lazy and shared within the update, so simultaneous diversions and planning perform at most one full scan.
+- Disabled spawning, a full global cap, and no ready policies skip planning snapshots. Existing journeys still receive maintenance.
 - Diplomacy queries are limited to factions owning eligible ports plus factions of active traffic fleets.
 - VIP selection generally scans ports for a weighted origin and destination; the worst case retries every origin when no route is available.
 - Both global and per-policy hard limits protect against unbounded spawning. Lowering a limit suppresses departures until existing traffic falls below it; it does not delete healthy fleets.
 - A large time step produces one scheduling pass, not a backlog of departures.
 - A policy exception is logged and that policy backs off for 30 campaign days; other policies may continue. Journey-management failures are not silently swallowed.
+
+The console status includes planning passes, maintenance passes, sector scans, and last/max update milliseconds. Counters and timings reset on load. Timings cover this manager's due update work, including fleet construction when it spawns; they do not measure native fleet AI or rendering. Use them in a real campaign before attributing frame-time problems to this mod.
+
+The planning deadline retains the original `nextTick` field for save compatibility. A transient initialization flag rebases both deadlines from the saved simulation day on first advance after load, using current settings. This handles old daily deadlines without an immediate catch-up pass. It also means repeatedly reloading postpones the next pass. The headless tests check this initialization behavior, not the game's actual save serializer.
 
 For much larger traffic populations, consider virtual routes that only instantiate fleets near the player. This prototype keeps every active journey as a real campaign fleet and deliberately bounds their count.
 

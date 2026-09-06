@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Supplier;
 import livingsector.LivingSectorPlugin;
 import livingsector.LivingSectorSettings;
 import livingsector.model.SectorSnapshot;
@@ -29,53 +30,96 @@ public final class TrafficManager implements EveryFrameScript {
     private final Map<String, Double> retryAfter = new HashMap<String, Double>();
     private double day, nextTick = 1;
     private long spawned;
+    // Deadlines are reset once on load, including migration from the original daily scheduler.
+    private transient boolean cadenceInitialized;
+    private transient double nextMaintenance;
+    private transient long planningPasses, maintenancePasses, snapshotReads;
+    private transient double lastUpdateMillis, maxUpdateMillis;
 
     public boolean isDone() { return false; }
     public boolean runWhilePaused() { return false; }
 
     public void advance(float amount) {
         if (Global.getSector().isPaused()) return;
+        LivingSectorSettings settings = LivingSectorPlugin.settings();
+        if (!cadenceInitialized) {
+            nextTick = day + settings.planningIntervalDays;
+            nextMaintenance = day + settings.maintenanceIntervalDays;
+            cadenceInitialized = true;
+        }
         day += Global.getSector().getClock().convertToDays(amount);
-        if (day < nextTick) return;
-        nextTick = day + 1; // No catch-up burst after a large time step.
-        tick();
+        boolean maintain = day >= nextMaintenance;
+        boolean plan = day >= nextTick;
+        if (!maintain && !plan) return;
+        // Schedule from now: loading or advancing a long time never produces catch-up bursts.
+        if (maintain) nextMaintenance = day + settings.maintenanceIntervalDays;
+        if (plan) nextTick = day + settings.planningIntervalDays;
+        long started = System.nanoTime();
+        PassSnapshot snapshot = new PassSnapshot();
+        if (maintain && !journeys.isEmpty()) maintainJourneys(snapshot);
+        if (plan && settings.enabled) planTraffic(snapshot, settings);
+        lastUpdateMillis = (System.nanoTime() - started) / 1000000.0;
+        maxUpdateMillis = Math.max(maxUpdateMillis, lastUpdateMillis);
     }
 
-    private void tick() {
-        Set<String> factions = new LinkedHashSet<String>();
-        for (TrafficJourney journey : journeys) factions.add(journey.fleet.getFaction().getId());
-        SectorSnapshot snapshot = SectorReader.capture(factions);
+    /** Shared only within this update; a diversion can reuse the planning snapshot or vice versa. */
+    private final class PassSnapshot implements Supplier<SectorSnapshot> {
+        private SectorSnapshot value;
+        public SectorSnapshot get() {
+            if (value == null) {
+                Set<String> factions = new LinkedHashSet<String>();
+                for (TrafficJourney journey : journeys) factions.add(journey.fleet.getFaction().getId());
+                value = SectorReader.capture(factions);
+                snapshotReads++;
+            }
+            return value;
+        }
+    }
+
+    private void maintainJourneys(Supplier<SectorSnapshot> snapshot) {
+        maintenancePasses++;
         Iterator<TrafficJourney> iterator = journeys.iterator();
         while (iterator.hasNext()) {
             TrafficJourney journey = iterator.next();
-            if (journey.advance(snapshot, day)) {
+            if (journey.advance(day, snapshot)) {
                 debug("Finished tracking " + journey.typeId + " from " + journey.originId);
                 iterator.remove();
             }
         }
-        LivingSectorSettings settings = LivingSectorPlugin.settings();
-        // Disabling departures still lets existing journeys finish and be cleaned up.
-        if (!settings.enabled) return;
+    }
+
+    private void planTraffic(Supplier<SectorSnapshot> snapshot, LivingSectorSettings settings) {
+        // Release native arrivals even if maintenance is configured less frequently than planning.
+        for (Iterator<TrafficJourney> iterator = journeys.iterator(); iterator.hasNext();) {
+            if (!iterator.next().fleet.isAlive()) iterator.remove();
+        }
+        if (journeys.size() >= settings.globalFleetLimit) return;
         List<TrafficPolicy> policies = TrafficRegistry.policies();
-        Collections.shuffle(policies, random); // Fair access to the shared fleet limit.
+        for (Iterator<TrafficPolicy> iterator = policies.iterator(); iterator.hasNext();) {
+            Double retry = retryAfter.get(iterator.next().getId());
+            if (retry != null && day < retry) iterator.remove();
+        }
+        if (policies.isEmpty()) return;
+        planningPasses++;
+        Collections.shuffle(policies, random);
+        List<TrafficContext.Route> active = new ArrayList<TrafficContext.Route>();
+        for (TrafficJourney journey : journeys) active.add(journey.route());
         for (TrafficPolicy policy : policies) {
             if (journeys.size() >= settings.globalFleetLimit) break;
-            Double retry = retryAfter.get(policy.getId());
-            if (retry != null && day < retry) continue;
             try {
-                List<TrafficContext.Route> active = new ArrayList<TrafficContext.Route>();
-                for (TrafficJourney journey : journeys) active.add(journey.route());
-                TrafficPlan plan = scheduler.evaluate(policy, snapshot, active, day, random);
+                TrafficPlan plan = scheduler.evaluate(policy, snapshot.get(), active, day,
+                        settings.planningIntervalDays, random);
                 if (plan == null) continue;
                 CampaignFleetAPI fleet = CivilianFleetFactory.spawn(plan, random);
                 if (fleet == null) continue;
-                journeys.add(new TrafficJourney(fleet, plan, day));
+                TrafficJourney journey = new TrafficJourney(fleet, plan, day);
+                journeys.add(journey);
+                active.add(journey.route());
                 scheduler.recordDeparture(plan, day);
                 spawned++;
                 debug("Spawned " + plan.typeId + ": " + plan.originId + " -> " + plan.destinationId
                         + "; active=" + journeys.size() + "; target=" + scheduler.target(plan.typeId));
             } catch (RuntimeException ex) {
-                // One faulty extension should not stop other traffic types or flood the log every frame.
                 retryAfter.put(policy.getId(), day + 30);
                 Global.getLogger(TrafficManager.class).error("Living Sector policy failed: "
                         + policy.getId() + "; retrying in 30 campaign days", ex);
@@ -90,7 +134,12 @@ public final class TrafficManager implements EveryFrameScript {
             if (!(script instanceof TrafficManager)) continue;
             TrafficManager manager = (TrafficManager) script;
             StringBuilder out = new StringBuilder("Living Sector: active=").append(manager.journeys.size())
-                    .append(", total spawned=").append(manager.spawned);
+                    .append(", total spawned=").append(manager.spawned)
+                    .append("; planning passes=").append(manager.planningPasses)
+                    .append("; maintenance passes=").append(manager.maintenancePasses)
+                    .append("; sector scans=").append(manager.snapshotReads)
+                    .append("; last/max update ms=").append(manager.lastUpdateMillis)
+                    .append('/').append(manager.maxUpdateMillis);
             for (TrafficPolicy policy : TrafficRegistry.policies()) {
                 out.append("; ").append(policy.getId()).append(" target=")
                         .append(Math.round(manager.scheduler.target(policy.getId()) * 10) / 10.0);

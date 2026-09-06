@@ -1,6 +1,6 @@
 package livingsector.traffic;
 
-/** A policy may calculate a new budget from current game state every day. */
+/** A policy may calculate a new budget from current game state each planning pass. */
 public final class TrafficBudget {
     public final double target, variation, rerollDays, dailyChance, originCooldownDays;
     public final int hardLimit;
@@ -24,6 +24,12 @@ public final class TrafficBudget {
     public static double spawnChance(int active, double target, double dailyChance) {
         if (target <= 0) return 0;
         return dailyChance / (1 + Math.pow(active / target, 4));
+    }
+
+    /** Probability of at least one opportunity over a window, not a backlog of fleets. */
+    public static double intervalChance(double dailyChance, double days) {
+        if (!finite(days) || days <= 0) throw new IllegalArgumentException("Invalid planning interval");
+        return 1 - Math.pow(1 - dailyChance, days);
     }
 
     private static boolean finite(double value) {
