@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "debugLogging": false,
+  "globalFleetLimit": 40,
+  "vip": {
+    "enabled": true,
+    "includeStations": false,
+    "minimumMarketSize": 3,
+    "baseTarget": 2.0,
+    "marketsPerAdditionalFleet": 12.0,
+    "maximumTarget": 20.0,
+    "targetVariation": 0.25,
+    "targetRerollDays": 25.0,
+    "dailySpawnChance": 0.35,
+    "hardLimit": 30,
+    "originCooldownDays": 10.0,
+    "maximumTripDays": 180.0,
+    "boardingDays": 0.5,
+    "variant": "mudskipper_Standard"
+  }
+}

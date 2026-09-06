@@ -1,0 +1,8 @@
+/build/
+/dist/
+/jars/*.jar
+/.idea/
+/.vscode/
+*.iml
+*.class
+.DS_Store
