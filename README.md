@@ -2,6 +2,8 @@
 
 A Starsector mod for making the sector feel inhabited through traffic driven by game state.
 
+In this project's feature discussions, "planets" generally includes inhabited stations unless explicitly stated otherwise.
+
 The first feature is a VIP shuttle traveling between two colonies that are not hostile to each other. The main deliverable is the framework underneath it: new traffic algorithms can use colony data, diplomacy, existing journeys, and departure history without rewriting scheduling or fleet management.
 
 **Status:** 0.1.1 prototype for Starsector **0.98a-RC8**. Compiled against that API and covered by automated policy and journey tests. The live campaign smoke test is still pending; see [testing](docs/TESTING.md).
@@ -9,7 +11,7 @@ The first feature is a VIP shuttle traveling between two colonies that are not h
 ## Phase 1
 
 - Occasional, attackable civilian fleets named **VIP Shuttle**, using the vanilla Mudskipper transport.
-- Trips between distinct inhabited planets, within a system or across systems. Same-faction and neutral-to-friendly cross-faction routes are allowed. Stations are optional.
+- Trips between distinct inhabited planets and stations, within a system or across systems. Same-faction and neutral-to-friendly cross-faction routes are allowed.
 - A colony-count-based population target that varies over time. Crowding reduces departure probability; per-type and global hard limits bound fleet count.
 - Origin cooldowns and duplicate-route prevention.
 - Current route relations are checked every two campaign days by default. War, hostile conquest, or a disappearing destination causes diversion to a safe port.
@@ -56,7 +58,7 @@ Edit [data/config/living_sector.json](data/config/living_sector.json), then rest
 | `globalFleetLimit` | `40` | Maximum tracked fleets across all Living Sector traffic policies. |
 | `planningIntervalDays` | `5` | Campaign days between traffic planning passes and their sector snapshots. |
 | `maintenanceIntervalDays` | `2` | Campaign days between active-fleet safety and cleanup checks. |
-| `vip.includeStations` | `false` | Allow inhabited stations as normal VIP endpoints. |
+| `vip.includeStations` | `true` | Include inhabited stations as normal VIP endpoints and in the population target. Set false for planet-only traffic. |
 | `vip.minimumMarketSize` | `3` | Minimum VIP endpoint size. |
 | `vip.baseTarget` | `2` | Base population target. |
 | `vip.marketsPerAdditionalFleet` | `12` | Eligible colonies per additional target fleet. |
@@ -73,6 +75,8 @@ With `N` eligible colonies, the base target is `min(20, 2 + N / 12)`, multiplied
 The daily probability basis is `p = 0.35 / (1 + (active / target)^4)`. At each planning pass, the probability of one departure is `1 - (1 - p)^planningIntervalDays`. With no active VIP traffic, the default five-day pass has about an 88% chance of proposing a trip. A policy can spawn **at most one fleet per pass**: longer intervals intentionally reduce maximum traffic throughput. Missed intervals do not queue catch-up spawns. Set `planningIntervalDays` to `1` to restore daily planning.
 
 The target controls crowding; it does not promise a particular number of shuttles. Travel duration, compatible routes, cooldowns, and planning frequency also determine observed traffic.
+
+Port selection mildly favors larger colonies and shorter trips. Origin weight is `sqrt(max(1, size - 2))`; destination weight is `sqrt(max(1, size - 2) / (1 + distanceLY / 10))`. A size-6 port gets twice the origin weight of a size-3 port. For equally sized destinations, one 10 light-years away gets about 71% of the weight of one in the same system. These preferences apply equally to planets and stations; eligibility, cooldowns, and diplomacy still apply.
 
 Routine maintenance reads only each journey's live endpoints and their faction relations. Full snapshots are created for planning or when an unsafe journey cannot return to its origin and needs another port. All searches within one update share a snapshot. Planning skips full scans when globally disabled, at the global fleet cap, or without policies ready to run. Maintenance can take up to its configured interval to notice a war or release a finished fleet; longer intervals trade responsiveness for less work. Native fleet AI continues moving between checks.
 

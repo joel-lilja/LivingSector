@@ -44,10 +44,10 @@ public final class TrafficTests {
         check(vip.plan(context(same), new Random(1)) != null, "Same-faction traffic is allowed");
         SectorSnapshot station = sector(Arrays.asList(port("a", "a"),
                 new Port("station", "Station", "a", "system", 6, 5, 1, 1, false, false)));
-        check(vip.plan(context(station), new Random(1)) == null, "Stations are opt-in");
+        check(vip.plan(context(station), new Random(1)) != null, "Stations are eligible by default");
         VipTrafficPolicy.Config config = new VipTrafficPolicy.Config();
-        config.includeStations = true;
-        check(new VipTrafficPolicy(config).plan(context(station), new Random(1)) != null, "Station opt-in works");
+        config.includeStations = false;
+        check(new VipTrafficPolicy(config).plan(context(station), new Random(1)) == null, "Station opt-out works");
         List<Port> ports = Arrays.asList(port("lonely", "enemy"), port("a", "a"), port("b", "a"));
         SectorSnapshot mixed = sector(ports, "enemy", "a");
         for (int seed = 0; seed < 100; seed++) {

@@ -21,7 +21,7 @@ Status for 0.1.1: **not yet performed**.
 
 1. Build, enable Living Sector in the launcher, and start Starsector 0.98a-RC8. Use a separate save slot for the prototype.
 2. Enable `debugLogging` in `data/config/living_sector.json` before starting the game. For a quicker touch test, temporarily set `planningIntervalDays` to `1.0`, `maintenanceIntervalDays` to `1.0`, `vip.dailySpawnChance` to `1.0` and `vip.originCooldownDays` to `0.0`. Restore normal values after testing.
-3. Load a campaign with at least two inhabited, non-hostile planets. Advance several unpaused campaign days. Look for `Spawned vip` in `starsector-core/starsector.log`.
+3. Load a campaign with at least two inhabited, non-hostile planets or stations. Advance several unpaused campaign days. Look for `Spawned vip` in `starsector-core/starsector.log`.
 4. If Console Commands is enabled, run the following to list active routes and current locations:
 
    ```text

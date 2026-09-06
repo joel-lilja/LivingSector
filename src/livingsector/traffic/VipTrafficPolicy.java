@@ -7,12 +7,12 @@ import java.util.Random;
 import livingsector.model.SectorSnapshot;
 import livingsector.model.SectorSnapshot.Port;
 
-/** First policy: occasional private travel, biased toward larger colonies and shorter routes. */
+/** First policy: occasional private travel, mildly biased toward larger colonies and shorter routes. */
 public final class VipTrafficPolicy implements TrafficPolicy {
     public static final String ID = "vip";
 
     public static final class Config {
-        public boolean enabled = true, includeStations = false;
+        public boolean enabled = true, includeStations = true;
         public int minimumMarketSize = 3, hardLimit = 30;
         public double baseTarget = 2, marketsPerAdditionalFleet = 12, maximumTarget = 20;
         public double targetVariation = .25, targetRerollDays = 25, dailySpawnChance = .35;
@@ -78,6 +78,8 @@ public final class VipTrafficPolicy implements TrafficPolicy {
 
     private double weight(Port port, Port origin) {
         double size = Math.max(1, port.size - 2);
-        return origin == null ? size : size / (1 + origin.distanceLY(port) / 10);
+        // Compress both size and distance advantages while preserving their ordering.
+        double weight = origin == null ? size : size / (1 + origin.distanceLY(port) / 10);
+        return Math.sqrt(weight);
     }
 }

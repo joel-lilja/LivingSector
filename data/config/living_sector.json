@@ -6,7 +6,7 @@
   "maintenanceIntervalDays": 2.0,
   "vip": {
     "enabled": true,
-    "includeStations": false,
+    "includeStations": true,
     "minimumMarketSize": 3,
     "baseTarget": 2.0,
     "marketsPerAdditionalFleet": 12.0,
