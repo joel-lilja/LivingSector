@@ -1,0 +1,2 @@
+command,class,tags,syntax,help
+ls,livingsector.console.LivingSectorCommand,"campaign,livingsector",ls help,"Living Sector native-route test and diagnostics. Run ls help for actions."

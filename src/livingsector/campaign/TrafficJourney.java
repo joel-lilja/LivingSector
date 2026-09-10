@@ -4,6 +4,8 @@ import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.campaign.CampaignEventListener.FleetDespawnReason;
 import com.fs.starfarer.api.campaign.CampaignFleetAPI;
 import com.fs.starfarer.api.campaign.FleetAssignment;
+import com.fs.starfarer.api.campaign.BattleAPI;
+import com.fs.starfarer.api.campaign.listeners.FleetEventListener;
 import com.fs.starfarer.api.campaign.econ.MarketAPI;
 import com.fs.starfarer.api.util.Misc;
 import livingsector.model.SectorSnapshot;
@@ -13,12 +15,14 @@ import livingsector.traffic.TrafficPlan;
 import java.util.function.Supplier;
 
 /** Saved journey state. Native fleet AI handles navigation, jumps, avoidance and docking. */
-public final class TrafficJourney {
+public final class TrafficJourney implements FleetEventListener {
     final CampaignFleetAPI fleet;
     final String typeId, originId;
     String destinationId;
     final double expiresAt;
     boolean diverted, retiring;
+    transient TrafficRecorder recorder;
+    transient String debugOutcome, debugMovement, debugRetireReason;
 
     public TrafficJourney(CampaignFleetAPI fleet, TrafficPlan plan, double day) {
         this.fleet = fleet;
@@ -30,6 +34,30 @@ public final class TrafficJourney {
 
     public TrafficContext.Route route() { return new TrafficContext.Route(typeId, originId, destinationId); }
 
+    String historyId() { return "direct-" + fleet.getId(); }
+    void observeDebugMovement() {
+        if (recorder == null || !recorder.healthy() || !fleet.isAlive()) return;
+        String movement = TrafficRecorder.movement(fleet);
+        if (!movement.equals(debugMovement)) {
+            debugMovement = movement;
+            recorder.directEvent(this, "MOVEMENT_OBSERVED", movement);
+        }
+    }
+    @Override public void reportBattleOccurred(CampaignFleetAPI subject, CampaignFleetAPI winner, BattleAPI battle) {
+        if (recorder != null && recorder.healthy() && subject == fleet && debugOutcome == null) {
+            recorder.directEvent(this, "BATTLE", "battle callback; surviving ships=" + fleet.getFleetData().getMembersListCopy().size());
+        }
+    }
+    @Override public void reportFleetDespawnedToListener(CampaignFleetAPI subject, FleetDespawnReason reason, Object param) {
+        if (recorder == null || !recorder.healthy() || subject != fleet || debugOutcome != null) return;
+        if (reason == FleetDespawnReason.DESTROYED_BY_BATTLE || reason == FleetDespawnReason.NO_MEMBERS) debugOutcome = "DESTROYED";
+        else if (debugRetireReason != null || retiring) debugOutcome = "CANCELLED";
+        else if (reason == FleetDespawnReason.REACHED_DESTINATION) debugOutcome = diverted ? "CANCELLED" : "COMPLETED";
+        else debugOutcome = "UNKNOWN";
+        recorder.directEvent(this, debugOutcome, "despawn=" + reason + "; destination=" + destinationId
+                + (debugRetireReason == null ? "" : "; " + debugRetireReason));
+    }
+
     /** @return true when the manager may forget this journey. */
     public boolean advance(double day, Supplier<SectorSnapshot> fallbackSnapshot) {
         if (!fleet.isAlive()) return true;
@@ -37,7 +65,7 @@ public final class TrafficJourney {
         if (fleet.getBattle() != null) return false;
         if (fleet.isEmpty()) { fleet.despawn(FleetDespawnReason.NO_MEMBERS, null); return true; }
         if (day >= expiresAt) {
-            retire();
+            retire("trip expired");
             return !fleet.isAlive();
         }
         MarketAPI from = Global.getSector().getEconomy().getMarket(originId);
@@ -69,7 +97,7 @@ public final class TrafficJourney {
             }
         }
         if (fallback == null) {
-            retire();
+            retire("no safe port");
         } else {
             fleet.clearAssignments();
             fleet.addAssignment(FleetAssignment.GO_TO_LOCATION_AND_DESPAWN, fallback.getPrimaryEntity(),
@@ -77,13 +105,19 @@ public final class TrafficJourney {
             destinationId = fallback.getId();
             diverted = true;
             retiring = false;
+            debugRetireReason = null;
+            if (recorder != null) recorder.directEvent(this, "DIVERTED", "ports or diplomacy changed; new destination=" + destinationId);
             fleet.getMemoryWithoutUpdate().set("$livingSector_destination", destinationId);
             TrafficManager.debug("Diverted " + typeId + " from " + originId + " to " + destinationId);
         }
         return !fleet.isAlive();
     }
 
-    private void retire() {
+    private void retire(String reason) {
+        if (recorder != null && !reason.equals(debugRetireReason)) {
+            debugRetireReason = reason;
+            recorder.directEvent(this, "RETIRE_REQUESTED", reason);
+        }
         if (!fleet.isVisibleToPlayerFleet()) {
             fleet.despawn(FleetDespawnReason.OTHER, null);
         } else if (!retiring) {
@@ -91,6 +125,7 @@ public final class TrafficJourney {
             fleet.clearAssignments();
             fleet.addAssignment(FleetAssignment.HOLD, fleet, 10000f, "awaiting safe passage");
             retiring = true;
+            if (recorder != null) recorder.directEvent(this, "WAITING", reason + "; visible fleet awaiting safe passage");
         }
     }
 }

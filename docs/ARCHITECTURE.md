@@ -1,6 +1,30 @@
 # Architecture
 
-Living Sector separates **observation**, **decisions**, and **execution**. VIP traffic is the first policy using the framework. The current executor handles civilian point-to-point journeys; combat operations or multi-stop itineraries would require another executor or an extension to the journey model.
+Living Sector separates **observation**, **decisions**, and **execution**. VIP traffic is the first policy. Version 0.2.0 adds an experimental mission/native-route executor alongside the existing direct-fleet path. The latter remains the default for automatic departures; `useNativeRoutes` selects the new executor for future departures, while explicit console tests always use it.
+
+## Nex compatibility constraint
+
+Design for an ordinary installed Nexerelin release. Avoid requiring edits to Nex source/configuration, a custom Nex jar or a maintained fork. Compatibility adapters, workarounds and regression tests belong in Living Sector. Prefer existing APIs, listeners and extension points; when a required hook is unavailable, investigate a local fallback or reduce the feature's scope. Treat any proposal requiring upstream Nex changes as an exceptional dependency to discuss, not an implementation assumption. Integration tests exercise the installed Nex code without modifying it.
+
+## Mission and native-route slice
+
+`TrafficMission` is pure saved intent: stable ID, policy plan, faction, seed, ordered market stops, lifecycle, current stop, physical generation, and bounded event history. It owns completion/identity but not a second simulated position. `NativeMission` holds engine bindings and a condition checkpoint in the campaign layer.
+
+`NativeTraffic` compiles market itineraries into native boarding/travel/visit/docking segments and implements Nex route and fleet listeners. `NativeTrafficAssignmentAI` extends vanilla route assignments, using passive civilian stops and normal native placement/travel. The installed route manager retains control of spawning/despawning. Abstract travel and physical movement share one route; final completion is distinguished from intermediate arrival, destruction, cancellation, and distance despawn.
+
+Admission requires an active `NexRouteManager`. Nex installs this replacement through the `RouteManager` alias in its [XStream configuration](https://github.com/Histidine91/Nexerelin/blob/a669f4d0740e95a4acbb6b894dde09ade67aa754/jars/sources/ExerelinCore/exerelin/plugins/XStreamConfig.java#L216); a freshly generated campaign may require one save/load first. A rejected start explains this prerequisite before creating a mission or registering listeners. Living Sector does not replace the global manager or migrate other mods' routes itself.
+
+`FleetCheckpoint` preserves surviving ship IDs, variants, captains, hull fraction, base CR, mothball/flagship state, and cargo before native distance despawn. It creates new physical fleet containers from those survivors, rather than regenerating lost ships from the original profile. It imports the route's already-updated damage scalar without applying it again. Unreconciled additional abstract damage fails explicitly; a general virtual combat/attrition resolver is outside this slice. Module-specific damage and persistent multi-mission actors are not supported features yet.
+
+Civilian physical fleets carry the trade flag. Their route's `OptionalFleetData.strength` stays null so both checked Nex strategic-strength paths exclude them. This is separate from whether a hostile fleet pursues them.
+
+The existing manager stores the native executor lazily, preserving old saved manager/journey fields. On load it restores one transient Nex listener and reconciles existing fleet listeners; it does not respawn legacy journeys. Native missions share the existing global/per-policy admission accounting, count once across representations, and receive maintenance on the existing cadence. Manual tests bypass probability/cooldowns/duplicate suppression but still occupy global capacity. Recent terminal mission history is capped at 16 records; each mission keeps at most 12 event entries.
+
+`TrafficDebug` and the optional `ls` console command create/inspect trips and inject test-only losses. `DistractionProbe` runs only on explicit request, samples one location with a bounded fleet count, and expires after its requested duration. It never changes target selection. See [the live route procedure](ROUTE_TEST.md).
+
+The [long-run debug recorder](DEBUG_RECORDER_DESIGN.md) is off by default and separate from gameplay history. `TrafficRecorder` attaches transient event sinks to native missions and temporary listeners to direct journeys. `RotatingLog` manages bounded UTF-8 batches and a fixed common-file namespace shared across runs (32 MiB default, configurable from 8–128 MiB). `RecorderState` saves only the branch cursor. On-demand `RecorderReport` queries honor saved ancestor cutoffs and disclose missing history. No history files or LunaLib objects enter the save graph, and disabling the recorder detaches collection.
+
+The following diagram and direct-journey details describe the preserved POC path. Combat operations and non-market itineraries remain future work.
 
 ```mermaid
 flowchart LR

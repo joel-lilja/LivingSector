@@ -21,8 +21,9 @@ public final class VipTrafficPolicy implements TrafficPolicy {
         public String variant = "mudskipper_Standard";
     }
 
-    private final Config config;
+    private Config config;
     public VipTrafficPolicy(Config config) { this.config = config; }
+    public void updateConfig(Config config) { this.config = config; }
     public String getId() { return ID; }
 
     public TrafficBudget budget(SectorSnapshot sector) {

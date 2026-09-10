@@ -55,6 +55,10 @@ public final class TrafficScheduler {
     }
 
     public double target(String typeId) { return state(typeId).target; }
+    public void invalidateTarget(String typeId) {
+        TypeState state = states.get(typeId);
+        if (state != null) state.lastBaseTarget = -1;
+    }
 
     private TypeState state(String id) {
         TypeState state = states.get(id);

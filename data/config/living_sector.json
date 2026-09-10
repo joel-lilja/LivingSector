@@ -1,6 +1,9 @@
 {
   "enabled": true,
   "debugLogging": false,
+  "debugTrafficHistory": false,
+  "debugHistoryMiB": 32,
+  "useNativeRoutes": false,
   "globalFleetLimit": 40,
   "planningIntervalDays": 5.0,
   "maintenanceIntervalDays": 2.0,

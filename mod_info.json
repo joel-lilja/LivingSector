@@ -2,9 +2,10 @@
   "id": "living_sector",
   "name": "Living Sector",
   "author": "joel-lilja",
-  "version": "0.1.1",
-  "description": "A growing framework for sector activity. Phase 1 adds occasional VIP shuttles between non-hostile colonies.",
+  "version": "0.2.0",
+  "description": "State-driven civilian traffic, with an experimental persistent mission and native-route framework.",
   "gameVersion": "0.98a-RC8",
   "jars": ["jars/LivingSector.jar"],
-  "modPlugin": "livingsector.LivingSectorPlugin"
+  "modPlugin": "livingsector.LivingSectorPlugin",
+  "dependencies": [{"id": "nexerelin", "name": "Nexerelin"}]
 }

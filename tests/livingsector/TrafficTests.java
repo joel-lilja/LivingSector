@@ -30,6 +30,8 @@ public final class TrafficTests {
         changingSector();
         populationSimulation();
         extensionPolicy();
+        TrafficBehaviorTests.run();
+        MissionTests.run();
         System.out.println("PASS: " + checks + " traffic assertions");
     }
 

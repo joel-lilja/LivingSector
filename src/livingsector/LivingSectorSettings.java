@@ -7,6 +7,9 @@ import org.json.JSONObject;
 
 public final class LivingSectorSettings {
     public boolean enabled = true, debugLogging = false;
+    public boolean useNativeRoutes = false;
+    public boolean debugTrafficHistory = false;
+    public int debugHistoryMiB = 32;
     public int globalFleetLimit = 40;
     public double planningIntervalDays = 5, maintenanceIntervalDays = 2;
     public final VipTrafficPolicy.Config vip = new VipTrafficPolicy.Config();
@@ -16,6 +19,9 @@ public final class LivingSectorSettings {
         LivingSectorSettings settings = new LivingSectorSettings();
         settings.enabled = root.getBoolean("enabled");
         settings.debugLogging = root.getBoolean("debugLogging");
+        settings.useNativeRoutes = root.optBoolean("useNativeRoutes", false);
+        settings.debugTrafficHistory = root.optBoolean("debugTrafficHistory", false);
+        settings.debugHistoryMiB = root.optInt("debugHistoryMiB", 32);
         settings.globalFleetLimit = root.getInt("globalFleetLimit");
         settings.planningIntervalDays = root.optDouble("planningIntervalDays", 5);
         settings.maintenanceIntervalDays = root.optDouble("maintenanceIntervalDays", 2);
@@ -35,19 +41,23 @@ public final class LivingSectorSettings {
         vip.maximumTripDays = (float) json.getDouble("maximumTripDays");
         vip.boardingDays = (float) json.getDouble("boardingDays");
         vip.variant = json.getString("variant");
-        if (settings.globalFleetLimit < 1 || !positive(settings.planningIntervalDays)
-                || !positive(settings.maintenanceIntervalDays) || vip.minimumMarketSize < 1
+        settings.validate();
+        return settings;
+    }
+
+    public void validate() {
+        if (debugHistoryMiB < 8 || debugHistoryMiB > 128 || globalFleetLimit < 1 || !positive(planningIntervalDays)
+                || !positive(maintenanceIntervalDays) || vip.minimumMarketSize < 1
                 || !positive(vip.marketsPerAdditionalFleet) || !positive(vip.maximumTarget)
                 || !positive(vip.maximumTripDays) || !Double.isFinite(vip.boardingDays)
                 || vip.boardingDays < 0 || vip.maximumTripDays <= vip.boardingDays
                 || vip.variant.trim().isEmpty()) {
-            throw new IllegalArgumentException("Invalid Living Sector settings in data/config/living_sector.json");
+            throw new IllegalArgumentException("Invalid Living Sector settings");
         }
         new TrafficBudget(vip.baseTarget, vip.targetVariation, vip.targetRerollDays,
                 vip.dailySpawnChance, vip.hardLimit, vip.originCooldownDays);
         // Fail at startup with the offending variant, rather than during a campaign tick.
         Global.getSettings().getVariant(vip.variant);
-        return settings;
     }
 
     private static boolean positive(double value) { return Double.isFinite(value) && value > 0; }
