@@ -44,9 +44,7 @@ public final class TrafficJourney implements FleetEventListener {
         }
     }
     @Override public void reportBattleOccurred(CampaignFleetAPI subject, CampaignFleetAPI winner, BattleAPI battle) {
-        if (recorder != null && recorder.healthy() && subject == fleet && debugOutcome == null) {
-            recorder.directEvent(this, "BATTLE", "battle callback; surviving ships=" + fleet.getFleetData().getMembersListCopy().size());
-        }
+        if (recorder != null && subject == fleet) recorder.battle(subject, winner, battle);
     }
     @Override public void reportFleetDespawnedToListener(CampaignFleetAPI subject, FleetDespawnReason reason, Object param) {
         if (recorder == null || !recorder.healthy() || subject != fleet || debugOutcome != null) return;

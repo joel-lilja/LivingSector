@@ -217,7 +217,7 @@ final class EntryPointIntegrationTests {
         world.reloadHooks();
         world.routes.spawnRoute(entry.route);
         FakeFleet restored = world.created.get(1);
-        check(restored.members.size() == 1 && survivor.equals(restored.members.get(0).getId()), "Battle survivor persists through native rematerialization");
+        check(restored.members.size() == 1 && !survivor.equals(restored.members.get(0).getId()) && entry.budget.remaining == 3, "Battle losses persist as reduced budget through native regeneration");
         check(entry.route.getExtra().damage == .5f && entry.mission.generation() == 2, "Restoration does not apply native damage again");
     }
 

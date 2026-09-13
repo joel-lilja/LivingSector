@@ -37,6 +37,9 @@ public final class IntegrationSuite {
         OptionalDependencyTests.register(suite);
         RotatingLogTests.register(suite);
         RecorderIntegrationTests.register(suite);
+        BattleHistoryTests.register(suite);
+        PhaseAIntegrationTests.register(suite);
+        AttritionIntegrationTests.register(suite);
         }
         Global.getLogger(NativeTraffic.class).setLevel(org.apache.log4j.Level.OFF);
         Global.getLogger(livingsector.LivingSectorPlugin.class).setLevel(org.apache.log4j.Level.OFF);

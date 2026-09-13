@@ -19,6 +19,9 @@ import exerelin.campaign.fleets.NexRouteManager;
 import exerelin.campaign.fleets.utils.NexRouteManagerListener;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.Set;
+import livingsector.model.FleetBudget;
 import java.util.List;
 import java.util.Map;
 import livingsector.model.TrafficMission;
@@ -37,22 +40,28 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
     private transient TrafficRecorder recorder;
     void setRecorder(TrafficRecorder value) { recorder = value; }
 
-    public void onLoad() {
+    private void registerRouteListener() {
         if (!Global.getSector().getListenerManager().hasListener(this)) {
             Global.getSector().getListenerManager().addListener(this, true);
         }
+    }
+
+    public void onLoad() {
+        registerRouteListener();
         for (NativeMission entry : active.values()) {
+            ensureBudget(entry);
             CampaignFleetAPI fleet = fleet(entry);
             if (fleet != null && !fleet.getEventListeners().contains(this)) fleet.addEventListener(this);
         }
     }
 
     public int size() { return active.size(); }
+    public static boolean available() { return RouteManager.getInstance() instanceof NexRouteManager; }
 
     public void addRoutesTo(List<TrafficContext.Route> routes) {
         for (NativeMission entry : active.values()) {
             TrafficPlan plan = entry.mission.plan;
-            routes.add(new TrafficContext.Route(plan.typeId, plan.originId, plan.destinationId));
+            routes.add(new TrafficContext.Route(plan.typeId, plan.originId, plan.destinationId, entry.mission.stops.size() > 2));
         }
     }
 
@@ -73,12 +82,17 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
                 || !SectorReader.peaceful(from.getFactionId(), to.getFactionId())) {
             throw new IllegalArgumentException("The trip needs two distinct inhabited, non-hostile ports");
         }
-        onLoad();
+        plan = CivilianShipSelector.resolve(plan, from.getFactionId(), seed);
+        if (plan == null) return null; // No suitable faction/Independent passenger hull; do not admit a phantom trip.
+        float initialPoints = CivilianShipSelector.points(plan);
+        plan = plan.withoutSelectedVariants();
+        registerRouteListener();
         TrafficMission mission = new TrafficMission("ls-" + nextId++, plan, from.getFactionId(), seed,
-                day, roundTrip, test);
+                day, roundTrip || plan.roundTrip, test);
         NativeMission entry = new NativeMission(mission);
-        if (recorder != null) recorder.attach(mission, true);
+        entry.budget = new FleetBudget(initialPoints);
         active.put(mission.id, entry);
+        if (recorder != null) recorder.attach(mission, true);
         try {
             OptionalFleetData extra = new OptionalFleetData();
             extra.factionId = mission.factionId;
@@ -86,6 +100,7 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
             // Absence matters: a zero-valued strength still appears in one Nex report.
             extra.strength = null;
             extra.damage = 0f;
+            extra.fp = initialPoints;
             RouteData route = manager.addRoute(SOURCE, from, seed, extra, this, entry);
             entry.route = route;
             compileItinerary(route, mission);
@@ -131,29 +146,31 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
                 mission.finish(State.CANCELLED, "ports changed before materialization");
                 return null;
             }
+            if (!reconcileAbstractDamage(entry)) return null;
             MarketAPI origin = market(mission.plan.originId);
-            if (entry.checkpoint == null) {
-                fleet = CivilianFleetFactory.create(mission.plan, origin, mission.factionId);
-                route.getExtra().fp = (float) fleet.getFleetPoints();
-            } else {
-                // Physical battle losses have already been captured as surviving members.
-                // A new abstract loss needs a separate supported resolver; never silently heal it.
-                if (damage(route) > entry.checkpoint.routeDamage + .001f) {
-                    throw new IllegalStateException("Unreconciled abstract damage; refusing to regenerate ships");
-                }
-                if (entry.checkpoint.ships.isEmpty()) {
-                    mission.finish(State.DESTROYED, "no surviving ships in checkpoint");
-                    return null;
-                }
-                fleet = CivilianFleetFactory.empty(mission.plan, origin, mission.factionId);
-                entry.checkpoint.restore(fleet);
+            long generationSeed = mission.seed + 0x9E3779B97F4A7C15L * mission.generation();
+            TrafficPlan generated = CivilianShipSelector.generate(mission.plan, mission.factionId,
+                    generationSeed, entry.budget.remaining);
+            if (generated == null) {
+                mission.finish(State.CANCELLED, "no eligible civilian ship fits remaining budget " + entry.budget.remaining);
+                return null;
             }
+            fleet = CivilianFleetFactory.create(generated, origin, mission.factionId);
+            float generatedFP = points(fleet);
+            entry.budget.beginPhysical(generatedFP);
+            // Nex adds lostFP / startingFP to cumulative route damage. Scale the denominator
+            // to the original route allowance, including generation rounding, on OUR fleet only.
+            fleet.getMemoryWithoutUpdate().set("$startingFP", generatedFP / Math.max(.000001f, 1 - entry.budget.routeDamage));
             fleet.setName(mission.plan.fleetName + (mission.test ? " [" + mission.id + "]" : ""));
             fleet.getMemoryWithoutUpdate().set(MISSION_KEY, mission.id);
             fleet.addEventListener(this);
             // This native subclass places the fleet at the route's actual progress.
             fleet.addScript(new NativeTrafficAssignmentAI(fleet, route));
             mission.bindFleet(fleet.getId());
+            if (recorder != null) {
+                recorder.materialized(entry, fleet);
+                recorder.trackBattleFleet(mission, fleet);
+            }
             observeProgress(entry);
             log(mission, "spawned " + fleet.getId());
             return fleet;
@@ -172,14 +189,18 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
     public void reportAboutToBeDespawnedByRouteManager(RouteData route) {
         NativeMission entry = entry(route);
         if (entry == null || route.getActiveFleet() == null) return;
-        entry.checkpoint = FleetCheckpoint.capture(route.getActiveFleet(), damage(route));
-        entry.mission.note("CHECKPOINT", "checkpoint: " + entry.checkpoint.ships.size() + " survivors; native damage=" + damage(route));
+        ensureBudget(entry);
+        float before = entry.budget.remaining;
+        entry.budget.endPhysical(points(route.getActiveFleet()), damage(route));
+        budgetEvent(entry, "BUDGET_CAPTURED", before, "physical survivors captured at native distance despawn");
+        if (entry.budget.remaining <= 0) entry.mission.finish(State.DESTROYED, "no surviving fleet budget");
     }
 
     @Override
     public boolean shouldRepeat(RouteData route) {
         NativeMission entry = entry(route);
         if (entry != null && entry.mission.active()) {
+            if (!reconcileAbstractDamage(entry)) return false;
             if (entry.cancelReason != null) entry.mission.finish(State.CANCELLED, entry.cancelReason);
             else if (!safe(entry)) entry.mission.finish(State.CANCELLED, "destination invalid at abstract arrival");
             else {
@@ -209,17 +230,19 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
     @Override public void reportRouteFleetDespawned(CampaignFleetAPI fleet, RouteData route) {
         NativeMission entry = entry(route);
         if (entry != null) entry.mission.releaseFleet(fleet.getId());
+        fleet.removeEventListener(this);
     }
 
     @Override public void reportBattleOccurred(CampaignFleetAPI fleet, CampaignFleetAPI winner, BattleAPI battle) {
         // FleetEventListener's global broadcast has no fleet. We are registered globally
         // for Nex route events; track battles only via our directly attached fleet listener.
         if (fleet == null) return;
+        if (recorder != null) recorder.battle(fleet, winner, battle);
         NativeMission entry = entry(fleet);
         if (entry != null && entry.mission.active()) {
             entry.battles++;
-            entry.mission.note("BATTLE", "native battle callback " + entry.battles);
-            // Nex may update extra.damage after this callback. Checkpoint at dematerialization.
+            entry.mission.note("BATTLE_CALLBACK", "native battle callback " + entry.battles);
+            // Nex may update extra.damage after this callback. Compress at dematerialization.
         }
     }
 
@@ -227,11 +250,27 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
         NativeMission entry = entry(fleet);
         if (entry == null || !fleet.getId().equals(entry.mission.fleetId())) return;
         TrafficMission mission = entry.mission;
+        if (reason != FleetDespawnReason.PLAYER_FAR_AWAY && reason != FleetDespawnReason.DESTROYED_BY_BATTLE
+                && reason != FleetDespawnReason.NO_MEMBERS && entry.budget != null && entry.budget.physicalFP > 0) {
+            float before = entry.budget.remaining;
+            entry.budget.endPhysical(points(fleet), damage(entry.route));
+            budgetEvent(entry, "BUDGET_CAPTURED", before, "physical survivors at terminal despawn");
+            if (entry.budget.remaining <= 0) {
+                mission.finish(State.DESTROYED, "no survivors at terminal despawn");
+                return;
+            }
+        }
         if (reason == FleetDespawnReason.PLAYER_FAR_AWAY) {
             entry.distanceDespawns++;
             mission.releaseFleet(fleet.getId());
             if (entry.cancelReason != null) mission.finish(State.CANCELLED, entry.cancelReason);
         } else if (reason == FleetDespawnReason.DESTROYED_BY_BATTLE || reason == FleetDespawnReason.NO_MEMBERS) {
+            if (entry.budget != null) {
+                float before = entry.budget.remaining;
+                entry.budget.endPhysical(0, damage(entry.route));
+                entry.budget.remaining = 0;
+                budgetEvent(entry, "BUDGET_CAPTURED", before, "physical fleet destroyed");
+            }
             mission.finish(State.DESTROYED, reason.toString());
         } else if (entry.cancelReason != null) {
             mission.finish(State.CANCELLED, entry.cancelReason);
@@ -256,7 +295,7 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
     public void maintain(double day) {
         if (active.isEmpty()) return;
         RouteManager manager = RouteManager.getInstance();
-        List<RouteData> registered = manager.getRoutesForSource(SOURCE);
+        Set<RouteData> registered = new HashSet<RouteData>(manager.getRoutesForSource(SOURCE));
         for (NativeMission entry : new ArrayList<NativeMission>(active.values())) {
             if (recorder != null) recorder.observe(entry);
             CampaignFleetAPI fleet = fleet(entry);
@@ -265,6 +304,9 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
             if (fleet != null && fleet.isEmpty()) {
                 fleet.despawn(FleetDespawnReason.NO_MEMBERS, null);
                 fleet = null;
+            }
+            if (entry.mission.active()) {
+                if (fleet == null && bound) reconcileAbstractDamage(entry);
             }
             if (entry.mission.active()) {
                 observeProgress(entry);
@@ -284,6 +326,57 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
                 archive(entry);
             }
         }
+    }
+
+    /** Called only at native boundaries or scheduled maintenance; never apply physical losses twice. */
+    private boolean reconcileAbstractDamage(NativeMission entry) {
+        if (!entry.mission.active()) return false;
+        if (entry.route.getActiveFleet() != null) return true;
+        ensureBudget(entry);
+        float before = entry.budget.remaining;
+        if (entry.budget.applyAbstract(damage(entry.route)))
+            budgetEvent(entry, "ABSTRACT_DAMAGE", before, "additional native route damage");
+        if (entry.budget.remaining > 0) return true;
+        entry.mission.finish(State.DESTROYED, "no remaining fleet budget after offscreen route damage");
+        return false;
+    }
+
+    /** Convert old saved bindings once, never retaining per-ship API objects afterwards. */
+    private void ensureBudget(NativeMission entry) {
+        if (entry.budget != null) return;
+        CampaignFleetAPI physical = fleet(entry);
+        float accounted = entry.checkpoint == null ? 0 : entry.checkpoint.routeDamage;
+        if (physical != null) {
+            // Current physical ships supersede an older distance-despawn checkpoint.
+            entry.budget = FleetBudget.migrate(points(physical), Math.max(accounted, damage(entry.route)));
+            if (entry.budget.remaining > 0) {
+                entry.budget.beginPhysical(entry.budget.remaining);
+                physical.getMemoryWithoutUpdate().set("$startingFP",
+                        entry.budget.physicalFP / Math.max(.000001f, 1 - entry.budget.routeDamage));
+            }
+        } else if (entry.checkpoint != null) {
+            entry.budget = FleetBudget.migrate(entry.checkpoint.survivingPoints(), accounted);
+        } else {
+            entry.budget = new FleetBudget(CivilianShipSelector.points(entry.mission.plan));
+        }
+        entry.mission.plan = entry.mission.plan.withoutSelectedVariants();
+        entry.checkpoint = null;
+        budgetEvent(entry, "BUDGET_MIGRATED", entry.budget.remaining, "converted legacy fleet state to aggregate budget");
+    }
+
+    private void budgetEvent(NativeMission entry, String kind, float before, String reason) {
+        entry.debugPreviousFP = before;
+        try {
+            entry.mission.note(kind, reason + "; budget FP=" + before + " -> " + entry.budget.remaining
+                    + "; accounted route damage=" + entry.budget.routeDamage);
+        } finally { entry.debugPreviousFP = null; }
+    }
+
+    static float points(CampaignFleetAPI fleet) {
+        float points = 0;
+        for (com.fs.starfarer.api.fleet.FleetMemberAPI member : fleet.getFleetData().getMembersListCopy())
+            points += member.getFleetPointCost();
+        return points;
     }
 
     private void returnFleet(NativeMission entry, CampaignFleetAPI fleet) {
@@ -372,6 +465,7 @@ public final class NativeTraffic implements RouteFleetSpawner, NexRouteManagerLi
         if (recent.size() == 16) recent.remove(0);
         recent.add(entry.mission);
         entry.checkpoint = null;
+        entry.budget = null;
         entry.route = null;
     }
     private static void log(TrafficMission mission, String message) {

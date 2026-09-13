@@ -34,15 +34,14 @@ public final class TrafficScheduler {
         }
         // Avoid keeping IDs for decivilized/removed markets forever.
         state.lastDepartures.keySet().retainAll(portIds(sector));
-        int count = 0;
-        for (TrafficContext.Route route : active) if (policy.getId().equals(route.typeId)) count++;
+        TrafficContext context = new TrafficContext(sector, active, day,
+                budget.originCooldownDays, state.lastDepartures);
+        int count = context.count(policy);
         if (count >= budget.hardLimit || random.nextDouble()
                 >= TrafficBudget.intervalChance(
                         TrafficBudget.spawnChance(count, state.target, budget.dailyChance), intervalDays)) return null;
-        TrafficContext context = new TrafficContext(sector, active, day,
-                budget.originCooldownDays, state.lastDepartures);
         TrafficPlan plan = policy.plan(context, random);
-        if (plan != null && (!policy.getId().equals(plan.typeId) || !context.canDepart(plan.originId)
+        if (plan != null && (!policy.acceptsType(plan.typeId) || !policy.getId().equals(plan.budgetId()) || !context.canDepart(plan.originId)
                 || context.routeActive(plan.typeId, plan.originId, plan.destinationId))) {
             throw new IllegalArgumentException("Policy returned an invalid or duplicate departure: " + policy.getId());
         }
@@ -51,7 +50,7 @@ public final class TrafficScheduler {
 
     /** Only successful game-world spawns consume the origin cooldown. */
     public void recordDeparture(TrafficPlan plan, double day) {
-        state(plan.typeId).lastDepartures.put(plan.originId, day);
+        state(plan.budgetId()).lastDepartures.put(plan.originId, day);
     }
 
     public double target(String typeId) { return state(typeId).target; }

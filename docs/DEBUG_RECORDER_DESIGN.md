@@ -1,6 +1,6 @@
 # Traffic debug recorder design
 
-**Status: implemented; live smoke test pending.** The existing `debugLogging` setting controls basic log messages. This recorder is a separate, optional tool for investigating long campaign runs.
+**Status: implemented; recording and reporting passed a continuous live run.** Recorder save/load compatibility, the corrected Luna startup, and enriched battle details still need live checks. The existing `debugLogging` setting controls basic log messages. This recorder is a separate, optional tool for investigating long campaign runs.
 
 ## Recording
 
@@ -57,7 +57,7 @@ ls debug off
 
 Console on/off overrides apply to the current loaded session until the next campaign load or Luna settings apply. Use the Luna/JSON setting to keep recording enabled across loads. Repeated `on` while healthy does not create another recording branch. Status and ordinary play do no recorder filesystem work while off. Explicit summary/run/trip queries can read existing files while off but do not rotate or write them.
 
-The files are `saves/common/living-sector-debug/slot-000.jsonl` through `slot-255.jsonl`. Only the configured number of slots is retained: up to 64 at the default, or 16 at 8 MiB. Each contains an ownership/order header followed by compact JSON events. The header counts toward the per-file and shared byte limits; there is no separately growing manifest. Sequence order, not slot number, determines chronological order after rotation. Logical UTF-8 content bytes are budgeted; filesystem allocation overhead is outside that accounting.
+The API names are `saves/common/living-sector-debug/slot-000.jsonl` through `slot-255.jsonl`. Starsector appends `.data` on disk, so the actual files are `slot-000.jsonl.data`, etc. Only the configured number of slots is retained: up to 64 at the default, or 16 at 8 MiB. Each contains an ownership/order header followed by compact JSON events. The header counts toward the per-file and shared byte limits; there is no separately growing manifest. Sequence order, not slot number, determines chronological order after rotation. Logical UTF-8 content bytes are budgeted; filesystem allocation overhead is outside that accounting.
 
 `ls debug export` flushes an enabled recorder and prints the archive location. These JSONL files are the structured export; the command does not generate additional unbounded copies. Copy them outside the game folder before further rotation if you want a permanent snapshot. Reports show at most 30 matching events, while the files contain all retained events. A direct trip's ID is `direct-<fleetId>`; native trips retain their `ls-<number>` IDs.
 
@@ -72,3 +72,19 @@ Existing trips are recorded as `OBSERVED_EXISTING`, not newly created departures
 Summary windows filter by event date. Journey duration statistics require both a retained creation and a terminal outcome, and use those observation times. Trips without a recorded terminal outcome are unresolved observations, not proof that those fleets still exist. Reports disclose missing sequences/ancestors, damaged lines, the oldest retained calendar date, and known unrecorded intervals. They cannot reconstruct a deleted beginning or a period when logging was disabled.
 
 Any read/write/delete failure stops recorder writes and surfaces an error in `ls debug status` and the game log; traffic continues. Explicit `ls debug on` can retry after resolving the problem. A damaged or unrecognized slot header is preserved and causes recording to stop, rather than guessing ownership and deleting it. Move that file aside before retrying. A crash can lose the in-memory tail or interrupt the current file rewrite.
+
+## Battle evidence
+
+While recording is enabled, a transient global listener matches battle participants against tracked Living Sector fleet IDs. It uses pre-battle participant snapshots to include casualties that receive no surviving-fleet callback. Attached callbacks provide a fallback; repeated global/attached notifications for the same battle and fleet produce one `BATTLE` event. Retired bindings survive the synchronous callback dispatch and are removed on the next manager advance. There are no extra sector scans, and disabling recording removes the listener. A weak, capped cache prevents battle deduplication from retaining an unlimited history.
+
+The structured `battle` object records opponent/allied fleet IDs, names and factions; the primary winner; victory/defeat when established; player involvement; location; and before/after ship counts when snapshots exist. Missing ship IDs describe ships removed from the fleet, not proof of their final salvage/recovery fate. A destruction notification establishes an after-count of zero and is labelled as that count's source. Missing snapshots, sides or winner are explicit unknowns. Fleet lists retain at most 16 entries per side and missing-ship lists at most 32 IDs, with total counts retained. These are opponents, not an asserted initiating attacker. Pursuits that never become battles are still outside this recorder.
+
+`BATTLE` may follow `DESTROYED` in the event stream because the global post-battle notification can follow despawn. That event order does not revive the trip. Native `BATTLE_CALLBACK` notes are executor diagnostics, separate from the deduplicated `BATTLE` event. Historical exports cannot gain details that were never captured.
+
+## Possible library extraction (future)
+
+Keep the implementation in Living Sector until live battle and save/load behavior is established. Candidate reusable pieces are bounded event storage, timeline cursors and queries, and the battle evidence adapter. A separate library would need per-mod storage ownership and budgets, schema versioning, lifecycle hooks, and tests against the game's actual script restrictions. Traffic policies, market selection, and Nex mission execution remain Living Sector concerns. No separate library or new runtime dependency is introduced by this work.
+
+## Aggregate fleet regeneration
+
+Civilian missions now preserve an FP allowance and regenerate composition at native materialization. Native records include `initialBudgetFP`, `remainingBudgetFP` and `accountedRouteDamage`; `ABSTRACT_DAMAGE` and `BUDGET_CAPTURED` also include `previousBudgetFP`. `FLEET_COMPOSITION` contains the actual generated ship/variant IDs and FP. Compare observed battle casualties within a physical generation; changed IDs between generations are expected. No per-ship survivor checkpoint is retained for recording, and collection remains disabled when the recorder is off. See [damage accounting](OFFSCREEN_DAMAGE.md).

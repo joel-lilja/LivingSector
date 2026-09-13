@@ -145,12 +145,12 @@ public final class NativeTrafficTests {
         entry.route.getExtra().damage = .5f;
         world.routes.despawnRoute(entry.route);
         check(entry.mission.active() && entry.mission.fleetId() == null, "Native distance despawn retains mission and clears physical ID");
-        check(entry.checkpoint.ships.size() == 1 && entry.checkpoint.routeDamage == .5f, "Checkpoint imports survivors and already-applied native damage");
+        check(entry.checkpoint == null && entry.budget.remaining == 3 && entry.budget.routeDamage == .5f, "Budget imports survivors and already-applied native damage");
         check(world.routes.spawnRoute(entry.route), "Native route can materialize again");
         FakeFleet second = world.created.get(world.created.size() - 1);
-        check(second.members.size() == 1 && second.members.get(0).getId().equals(survivorId), "Lost ship stays absent and survivor ID persists");
-        check(second.members.get(0).getStatus().getHullFraction() == .42f
-                && second.members.get(0).getRepairTracker().getBaseCR() == .31f, "Hull and base CR survive reappearance without healing");
+        check(second.members.size() == 1 && !second.members.get(0).getId().equals(survivorId), "Regenerated ships fit the remaining budget and receive new identities");
+        check(second.members.get(0).getStatus().getHullFraction() == 1
+                && second.members.get(0).getRepairTracker().getBaseCR() == .7f, "Regeneration uses normal hull and CR defaults");
         check(entry.route.getExtra().damage == .5f, "Checkpoint import does not apply native loss twice");
         check(!first.id.equals(second.id) && entry.mission.generation() == 2, "Fleet ID changes while mission identity persists");
         world.traffic.reportRouteFleetDespawned(first.api, entry.route);

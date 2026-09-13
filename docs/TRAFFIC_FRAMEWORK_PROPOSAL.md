@@ -151,8 +151,7 @@ The current POC's final `GO_TO_LOCATION_AND_DESPAWN` assignment cannot simply se
 
 Use the native route's damage model as an integration starting point, then establish what our spawner must preserve. Aggregate damage is not an exact roster.
 
-The early experiment must reveal what happens to a damaged shuttle after distance despawn and reappearance. Do not knowingly regenerate it pristine or count destroyed ships again. Implement the smallest sufficient condition checkpoint; preserving every captain, cargo item, and individual escort forever becomes necessary only for features that promise that identity.
-
+**Updated civilian persistence decision:** ordinary civilian missions now keep an aggregate fleet-point budget and regenerate ships at native materialization. Exact survivor identity, loadout, hull/CR, captains and cargo are not requirements. Physical casualties and abstract route losses must reduce the budget once; generation must not reset the allowance. See [aggregate damage](OFFSCREEN_DAMAGE.md) and [scaling](SCALING.md).
 For named or player-interacted ships, stronger identity persistence may be justified. If the chosen adapter cannot preserve a needed feature, defer that feature or use a supported execution path that can; do not silently pretend it works.
 
 ## 7. Performance: start with bounded, occasional work

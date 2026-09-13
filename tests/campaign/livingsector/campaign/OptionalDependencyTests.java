@@ -12,6 +12,20 @@ final class OptionalDependencyTests {
     static void register(IntegrationSuite suite) {
         suite.add("optional.lunaAbsent", () -> startup(false));
         suite.add("optional.lunaMissingDespiteEnabledFlag", () -> startup(true));
+        suite.add("optional.startupWithoutReflection", OptionalDependencyTests::restrictedStartup);
+    }
+    private static void restrictedStartup() throws Exception {
+        for (boolean enabledFlag : new boolean[]{false, true}) {
+            World world = new World(); world.lunaEnabled = enabledFlag;
+            try (ScriptRestrictionLoader loader = new ScriptRestrictionLoader()) {
+                Class<?> type = loader.loadClass("livingsector.LivingSectorPlugin");
+                com.fs.starfarer.api.BaseModPlugin plugin = (com.fs.starfarer.api.BaseModPlugin) type.getConstructor().newInstance();
+                plugin.onApplicationLoad();
+                Object settings = type.getMethod("settings").invoke(null);
+                check(settings.getClass().getField("globalFleetLimit").getInt(settings) == 40,
+                        "Restricted plugin loads JSON defaults without any Luna jars, including a stale enabled flag");
+            }
+        }
     }
     private static void startup(boolean enabledFlag) throws Exception {
         try { Class.forName("lunalib.lunaSettings.LunaSettings"); throw new AssertionError("LunaLib leaked into absent-dependency test"); }

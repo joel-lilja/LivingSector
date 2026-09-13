@@ -4,27 +4,27 @@ import com.fs.starfarer.api.BaseModPlugin;
 import com.fs.starfarer.api.Global;
 import livingsector.campaign.TrafficManager;
 import livingsector.traffic.TrafficRegistry;
-import livingsector.traffic.VipTrafficPolicy;
+import livingsector.traffic.CivilianTrafficPolicy;
 
 public final class LivingSectorPlugin extends BaseModPlugin {
     public static final String ID = "living_sector";
     private static LivingSectorSettings settings;
-    private static VipTrafficPolicy vipPolicy;
+    private static CivilianTrafficPolicy civilianPolicy;
     private static Runnable refreshOptionalSettings;
 
     @Override
     public void onApplicationLoad() throws Exception {
         settings = LivingSectorSettings.load();
-        vipPolicy = new VipTrafficPolicy(settings.vip);
-        TrafficRegistry.register(vipPolicy);
+        civilianPolicy = new CivilianTrafficPolicy(settings.civilian);
+        TrafficRegistry.register(civilianPolicy);
         refreshOptionalSettings = null;
         if (Global.getSettings().getModManager().isModEnabled("lunalib")) {
             try {
-                // A string-only boundary keeps Luna classes out of ordinary startup/loading.
-                refreshOptionalSettings = (Runnable) Class.forName("livingsector.integration.LunaSettingsBridge")
-                        .getDeclaredConstructor().newInstance();
+                // Resolve the adapter only in the enabled branch. Starsector forbids reflective constructors.
+                // Its Luna dependencies stay inside the adapter; absent-library tests load this plugin without them.
+                refreshOptionalSettings = new livingsector.integration.LunaSettingsBridge();
                 refreshOptionalSettings.run();
-            } catch (ReflectiveOperationException | LinkageError | RuntimeException ex) {
+            } catch (LinkageError | RuntimeException ex) {
                 refreshOptionalSettings = null;
                 Global.getLogger(LivingSectorPlugin.class).warn("Living Sector: optional LunaLib integration unavailable; using JSON settings", ex);
             }
@@ -51,7 +51,7 @@ public final class LivingSectorPlugin extends BaseModPlugin {
         replacement.validate();
         LivingSectorSettings previous = settings;
         settings = replacement;
-        if (vipPolicy != null) vipPolicy.updateConfig(replacement.vip);
+        if (civilianPolicy != null) civilianPolicy.updateConfig(replacement.civilian);
         if (Global.getSector() != null) {
             for (com.fs.starfarer.api.EveryFrameScript script : Global.getSector().getScripts()) {
                 if (script instanceof TrafficManager) ((TrafficManager) script).settingsChanged(previous, replacement);

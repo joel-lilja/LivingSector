@@ -1,12 +1,8 @@
 package livingsector.campaign;
 
-import com.fs.starfarer.api.Global;
-import com.fs.starfarer.api.campaign.CampaignFleetAPI;
 import com.fs.starfarer.api.campaign.CargoAPI;
 import com.fs.starfarer.api.characters.PersonAPI;
 import com.fs.starfarer.api.combat.ShipVariantAPI;
-import com.fs.starfarer.api.fleet.FleetMemberAPI;
-import com.fs.starfarer.api.fleet.FleetMemberType;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -17,45 +13,24 @@ final class FleetCheckpoint {
         ShipVariantAPI variant;
         PersonAPI captain;
         float hull, cr;
+        float fleetPoints; // Absent in old saves; derived from the retained variant when needed.
         boolean mothballed, flagship;
     }
     final List<Ship> ships = new ArrayList<Ship>();
     CargoAPI cargo;
     float routeDamage;
 
-    static FleetCheckpoint capture(CampaignFleetAPI fleet, float damage) {
-        FleetCheckpoint saved = new FleetCheckpoint();
-        saved.routeDamage = damage;
-        saved.cargo = fleet.getCargo().createCopy();
-        for (FleetMemberAPI member : fleet.getFleetData().getMembersListCopy()) {
-            Ship ship = new Ship();
-            ship.id = member.getId();
-            ship.name = member.getShipName();
-            ship.variant = member.getVariant().clone();
-            ship.captain = member.getCaptain();
-            ship.hull = member.getStatus().getHullFraction();
-            ship.cr = member.getRepairTracker().getBaseCR();
-            ship.mothballed = member.isMothballed();
-            ship.flagship = member.isFlagship();
-            saved.ships.add(ship);
-        }
-        return saved;
-    }
-
-    void restore(CampaignFleetAPI fleet) {
+    /** Only retained to read old saves. New generations never create a rich checkpoint. */
+    float survivingPoints() {
+        float result = 0;
         for (Ship ship : ships) {
-            FleetMemberAPI member = Global.getFactory().createFleetMember(FleetMemberType.SHIP, ship.variant.clone());
-            member.setId(ship.id);
-            member.setShipName(ship.name);
-            member.setCaptain(ship.captain);
-            fleet.getFleetData().addFleetMember(member);
-            member.getRepairTracker().setMothballed(ship.mothballed);
-            member.getRepairTracker().setCR(ship.cr);
-            member.getStatus().setHullFraction(ship.hull);
-            if (ship.flagship) fleet.getFleetData().setFlagship(member);
+            if (ship.hull <= 0) continue;
+            float points = ship.fleetPoints;
+            if (!(points > 0) && ship.variant != null && ship.variant.getHullSpec() != null)
+                points = ship.variant.getHullSpec().getFleetPoints();
+            if (!Float.isFinite(points) || points <= 0) throw new IllegalStateException("Invalid legacy ship fleet points");
+            result += points;
         }
-        fleet.getFleetData().syncIfNeeded();
-        fleet.getCargo().clear();
-        fleet.getCargo().addAll(cargo);
+        return result;
     }
 }

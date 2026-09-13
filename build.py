@@ -187,15 +187,39 @@ def package(jar):
     print("Packaged", output)
 
 
+def benchmark():
+    """Profile the last validated candidate with the matching compiled campaign fixtures."""
+    report_path = ROOT / "build" / "reports" / "validated-build.json"
+    if not report_path.exists():
+        raise ValueError("Run integration or package successfully before benchmark")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    jar = Path(report["candidate_jar"])
+    if report["status"] != "passed" or hashlib.sha256(jar.read_bytes()).hexdigest() != report["sha256"]:
+        raise ValueError("Candidate does not match validated build; rerun integration")
+    classpath = os.pathsep.join([str(ROOT / "build" / "campaign-tests"), str(jar)] + report["dependencies"])
+    destination = ROOT / "build" / "benchmark"
+    compile_sources(sorted((ROOT / "tests" / "benchmarks").rglob("*.java")), destination, classpath)
+    output = ROOT / "build" / "reports" / "scaling.json"
+    run(["java", "-Xmx1024m", "-cp", str(destination) + os.pathsep + classpath,
+         "livingsector.campaign.ScalingBenchmark", output])
+    results = json.loads(output.read_text(encoding="utf-8"))
+    results["candidateSha256"] = report["sha256"]
+    output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    print("Headless scaling report (not live FPS/heap):", output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("test", "integration", "build", "package"), nargs="?", default="build")
+    parser.add_argument("command", choices=("test", "integration", "build", "package", "benchmark"), nargs="?", default="build")
     parser.add_argument("--game-root", type=Path,
                         default=Path(os.environ.get("STARSECTOR_HOME", str(ROOT.parents[1]))))
     args = parser.parse_args()
     for tool in ("java", "javac"):
         if not shutil.which(tool):
             parser.error("Install JDK 17 and put " + tool + " on PATH")
+    if args.command == "benchmark":
+        benchmark()
+        return
     if args.command != "test":
         reports = ROOT / "build" / "reports"
         for name in ("integration.xml", "luna-integration.xml", "validated-build.json"):

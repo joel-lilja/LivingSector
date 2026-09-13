@@ -21,6 +21,7 @@ import static livingsector.campaign.IntegrationSuite.check;
 
 final class RecorderIntegrationTests {
     static void register(IntegrationSuite suite) {
+        suite.add("recorder.settingsWithoutReflection", RecorderIntegrationTests::settingsWithoutReflection);
         suite.add("recorder.offHasNoIO", RecorderIntegrationTests::offHasNoIO);
         suite.add("recorder.nativeLifecycleAndStop", RecorderIntegrationTests::nativeLifecycleAndStop);
         suite.add("recorder.directArrival", () -> directOutcome(FleetDespawnReason.REACHED_DESTINATION, "COMPLETED"));
@@ -30,13 +31,55 @@ final class RecorderIntegrationTests {
         suite.add("recorder.oldSaveBaselineAndFailure", RecorderIntegrationTests::oldSaveBaselineAndFailure);
         suite.add("recorder.periodQueriesAndGaps", RecorderIntegrationTests::periodQueriesAndGaps);
     }
-    private static String command(String args) {
+    private static void settingsWithoutReflection() throws Exception {
+        new World();
+        livingsector.LivingSectorSettings settings = LivingSectorPlugin.settings();
+        settings.debugHistoryMiB = 16;
+        settings.planningIntervalDays = 7;
+        settings.vip.dailySpawnChance = .17;
+        settings.vip.variant = "custom_shuttle_Standard";
+        // Model the live script loader's refusal to resolve reflection classes for mod code.
+        // The harness itself still uses reflection to invoke the private snapshot and verify its data.
+        String target = "livingsector.campaign.TrafficRecorder";
+        java.net.URL jar = TrafficRecorder.class.getProtectionDomain().getCodeSource().getLocation();
+        try (java.net.URLClassLoader loader = new java.net.URLClassLoader(new java.net.URL[]{jar},
+                TrafficRecorder.class.getClassLoader()) {
+            @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (name.startsWith("java.lang.reflect.")) {
+                    throw new SecurityException("File access and reflection are not allowed to scripts. (" + name + ")");
+                }
+                if (!name.equals(target)) return super.loadClass(name, resolve);
+                Class<?> type = findLoadedClass(name);
+                if (type == null) type = findClass(name);
+                if (resolve) resolveClass(type);
+                return type;
+            }
+        }) {
+            java.lang.reflect.Method snapshot = loader.loadClass(target).getDeclaredMethod("settingsSnapshot");
+            snapshot.setAccessible(true);
+            JSONObject data = (JSONObject) snapshot.invoke(null);
+            checkSnapshot(settings, data);
+            checkSnapshot(settings.vip, data.getJSONObject("vip"));
+            checkSnapshot(settings.civilian, data.getJSONObject("civilian"));
+        }
+    }
+    private static void checkSnapshot(Object settings, JSONObject data) throws Exception {
+        for (Field field : settings.getClass().getFields()) {
+            if (field.getName().equals("vip") || field.getName().equals("civilian")) continue;
+            Object expected = field.get(settings), actual = data.get(field.getName());
+            if (expected instanceof Number) {
+                check(Math.abs(((Number) expected).doubleValue() - ((Number) actual).doubleValue()) < .000001,
+                        "Recorder retains effective numeric setting " + field.getName());
+            } else check(expected.equals(actual), "Recorder retains effective setting " + field.getName());
+        }
+    }
+    static String command(String args) {
         ConsoleOverlayPanel.setOutput("");
         CommandResult result = new livingsector.console.LivingSectorCommand().runCommand(args, CommandContext.CAMPAIGN_MAP);
         check(result == CommandResult.SUCCESS, "Command succeeds: ls " + args + "; " + ConsoleOverlayPanel.getOutput());
         return ConsoleOverlayPanel.getOutput();
     }
-    private static List<JSONObject> events(World world) throws Exception {
+    static List<JSONObject> events(World world) throws Exception {
         List<JSONObject> result = new ArrayList<JSONObject>();
         for (String value : world.commonFiles.values()) for (String line : value.split("\n")) {
             JSONObject event = new JSONObject(line);
@@ -44,10 +87,10 @@ final class RecorderIntegrationTests {
         }
         return result;
     }
-    private static long count(World world, String kind) throws Exception {
+    static long count(World world, String kind) throws Exception {
         return events(world).stream().filter(e -> kind.equals(e.optString("kind"))).count();
     }
-    private static void forceDirectPolicy() {
+    static void forceDirectPolicy() {
         TrafficRegistry.register(new TrafficPolicy() {
             public String getId() { return "recorder_test"; }
             public TrafficBudget budget(livingsector.model.SectorSnapshot sector) { return new TrafficBudget(10, 0, 25, 1, 1, 0); }
@@ -87,8 +130,8 @@ final class RecorderIntegrationTests {
         command("debug flush");
         check(count(world, "CREATED") == 1 && count(world, "MATERIALIZED") == 2 && count(world, "DEMATERIALIZED") == 2,
                 "Native recording follows identity across physical generations without duplicate spawn events");
-        check(count(world, "BATTLE") == 1 && count(world, "CHECKPOINT") == 2 && count(world, "COMPLETED") == 1,
-                "Battle, checkpoints and offscreen completion survive mission archival: " + command("debug summary all"));
+        check(count(world, "BATTLE") == 1 && count(world, "BUDGET_CAPTURED") == 2 && count(world, "COMPLETED") == 1,
+                "Battle, budget captures and offscreen completion survive mission archival: " + command("debug summary all"));
         check(command("debug summary 180").contains("COMPLETED=1"), "Completed trip remains queryable after leaving active history");
         command("debug off");
         int reads = world.recorderReads, writes = world.recorderWrites, deletes = world.recorderDeletes;

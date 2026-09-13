@@ -1,6 +1,28 @@
 # Testing
 
-## Current development build: 0.2.0
+For players, see [debug recording and useful commands](PLAYTEST.md). This page contains developer procedures and historical results.
+
+## Current development build: Phase A / 0.3.0
+
+Use a copy of an existing campaign and restart Starsector after installing the jar. Existing VIP journeys should finish normally. This upgrade's live save/load behavior is not yet established by the headless mission-data tests.
+
+1. Load the test save. For a freshly generated sector, save and load once to activate Nex's native route manager. `ls status` explains when automatic civilians are waiting for that prerequisite.
+2. In Luna → Living Sector, leave all three civilian types enabled. Confirm return chances of 0.35 / 0.50 / 0.25 and the shared budget controls. Debug recording remains off until you enable it in Luna or run `ls debug on`.
+3. Let 30–60 campaign days pass. Run `ls status`: look for `civilian_local`, `civilian_liner` and `civilian_charter`, an operator faction, remaining fleet-point budget, and a one-way or return itinerary. A small sector or a short run may not produce every type; the shared budget is probabilistic.
+4. Visit a mission using `ls visit <id>`, then `ls status <id>` and `ls verify <id>`. Observe boarding, travel and unloading. Only a sampled return trip should head home. For a quick deterministic check, temporarily disable other types and set that type's return chance to 0, then 1; changes affect new trips only. Restore the defaults afterward.
+5. Inspect fleets from modded factions. Passenger hulls should come from the faction's role lists or Independents; the fleet should retain the origin faction. Checkpoint a native trip with `ls away <id>`, allow normal distance despawn, then revisit; ships may change identity/composition/condition, but casualties must reduce the saved allowance. Short trips may finish before native distance despawn. Use the longer test itinerary in the [route procedure](ROUTE_TEST.md) for detailed checkpoint/battle steps.
+6. Save with active traffic, load, and verify the same mission IDs, budget state and return itineraries. Let them finish. Watch for duplicate fleets, replenished losses or broken bindings.
+7. After a longer run, use `ls debug flush` and `ls debug summary all`. Admission records include `roundTrip`; `FLEET_COMPOSITION` records actual ships and budget transitions have numeric before/after fields. Run `ls debug off` if recording was enabled only for testing.
+
+Automated additions cover 9,000 sampled itineraries, shared limits/cooldowns, optional returns, roster fallback/filtering, budgeted regeneration through real Nex spawn/despawn hooks, fresh-sector waiting, and saved mission data. Faction role choices and campaign entities are modeled; actual installed faction composition, sensor behavior and complete save graphs still require the above live checks. No changes to Nex are required.
+
+
+## Offscreen route damage handling
+
+Aggregate-budget scenarios cover damage before first materialization, insufficient/full budgets, repeated regeneration, four combinations of real Nex global/attached callback order, repeated battles across generations, old abstract/physical checkpoint migration, XStream watermarks and physical baselines, generation rounding, structured recorder output and disabled recording. Scaling regressions reject repeated route-list searches, verify admissions do not scan existing fleets, and run 100 missions through 300 physical generations to check binding cleanup. The pure suite samples 5,000 budget cases and compares 1,000 indexed queries with independent scans over 5,000 routes.
+These scenarios inject aggregate route damage and exercise the installed Nex lifecycle; they do not establish how often another mod applies offscreen damage to civilian routes. A complete live campaign save graph and naturally occurring offscreen damage remain live validation gaps. See [the model and its assumptions](OFFSCREEN_DAMAGE.md).
+
+## Historical native-route prototype: 0.2.0
 
 Start with the [native-route test instructions](ROUTE_TEST.md). The basic 0.2.0 native one-way trip has now passed live: user screenshots at elapsed days 26.1 and 33.6 show `ls-1 COMPLETED: physical fleet docked at final stop`, with no active native missions. Automatic departures continue using the original direct executor (5 then 6 total departures, 3 then 2 active). Return trips, distance despawn/restoration and battle-loss persistence remain live-test gaps. The separate 0.1.1 smoke-test record below applies to the original executor.
 
@@ -30,13 +52,16 @@ python3 build.py build
 
 # Same checks, then creates an installable zip without changing the installed jar.
 python3 build.py package
+
+# Benchmark the last validated candidate against fake campaign entities.
+python3 build.py benchmark
 ```
 
-The integration runner has 36 scenarios without LunaLib (`build/reports/integration.xml`) and 6 with the installed library (`build/reports/luna-integration.xml`). It continues through independent scenario failures, then exits unsuccessfully if any failed. Each scenario resets the campaign globals, mod settings and provider registry. The candidate jar is on the test classpath; production loose class files are excluded. Jar checks enforce Java 8 bytecode, configured entry-point presence, and exclusion of dependency/test classes. A successful run writes `build/reports/validated-build.json`, identifying the candidate SHA-256 and installed library paths; stale reports are cleared before a new full run.
+The integration runner has 59 scenarios without LunaLib (`build/reports/integration.xml`) and 7 with the installed library (`build/reports/luna-integration.xml`). It continues through independent scenario failures, then exits unsuccessfully if any failed. Each scenario resets the campaign globals, mod settings and provider registry. The candidate jar is on the test classpath; production loose class files are excluded. Jar checks enforce Java 8 bytecode, configured entry-point presence, and exclusion of dependency/test classes. A successful run writes `build/reports/validated-build.json`, identifying the candidate SHA-256 and installed library paths; stale reports are cleared before a new full run.
 
-LunaLib remains optional at runtime. Headless tests exercise its real CSV parser and settings callback, validate all 21 menu field mappings, retain valid settings after a rejected update, and preserve active traffic. A separate JVM removes its jars entirely and loads the plugin/campaign anyway. The live menu still needs a smoke test: restart with the new build, open Luna settings → Living Sector, disable automatic traffic and apply, then re-enable it. Existing trips should continue in either case. Leave basic debug logging off after testing. On a disposable test installation, disabling LunaLib should restore JSON settings without affecting saved missions; do not disable unrelated mods that require it.
+LunaLib remains optional at runtime. Headless tests exercise its real CSV parser and settings callback, validate all 28 menu field mappings, retain valid settings after a rejected update, and preserve active traffic. A separate JVM removes its jars entirely and loads the plugin/campaign anyway. The live menu still needs a smoke test: restart with the new build, open Luna settings → Living Sector, disable automatic traffic and apply, then re-enable it. Existing trips should continue in either case. Leave basic debug logging off after testing. On a disposable test installation, disabling LunaLib should restore JSON settings without affecting saved missions; do not disable unrelated mods that require it.
 
-Recorder scenarios cover zero recorder file I/O while disabled, native lifecycle events, direct arrivals/destruction/diversion, duplicate callbacks, recording an existing trip, write-error recovery, save rollback ancestry, period queries, and Luna's live recorder toggle. Storage scenarios fill multiple runs with UTF-8 events and check every write against the shared disk allowance, individual file size, and slot limit. They also cover reducing the allowance, read-only reports, deletion failures, and unrecognized files. File operations use an in-memory implementation of the common-file API; actual game file writing remains a live check.
+Recorder scenarios cover zero recorder file I/O while disabled, native lifecycle events, direct arrivals/destruction/diversion, duplicate callbacks, recording an existing trip, write-error recovery, save rollback ancestry, period queries, and Luna's live recorder toggle. Storage scenarios fill multiple runs with UTF-8 events and check every write against the shared disk allowance, individual file size, and slot limit. They also cover reducing the allowance, read-only reports, deletion failures, and unrecognized files. Test file operations use an in-memory implementation of the common-file API; actual game writing is covered by the live observations below.
 
 The reusable fixture and extension rules are documented in [tests/INTEGRATION.md](../tests/INTEGRATION.md). Core campaign/settings/listener stubs reject unmodeled calls. Fleet and ship doubles intentionally model only the state used by these scenarios; this is not a full fake Starsector engine.
 
@@ -55,7 +80,15 @@ The decision suite runs a deterministic 4,000-day simulation. The journey suite 
 
 Selection tests sample 12,000 proposals per comparison using fixed random seeds and broad acceptance bands. They check actual selected routes rather than calling the private weight calculation, so they catch accidental bias changes without depending on an exact random sequence. These are simulated proposals; they create no game fleets. All six scenarios run with `python3 build.py test`, and therefore also with `build` and `package`.
 
-## Recorder live smoke test (pending)
+## Recorder live smoke test (partial)
+
+The first live enable attempt stopped with `SecurityException: File access and reflection are not allowed to scripts. (java.lang.reflect.Field)`, before writing any events. The recorder now reads settings explicitly instead of reflecting over fields. A regression loads the candidate's recorder through a class loader that denies reflection classes and checks every effective settings value, including non-default overrides. It reproduced the exact exception before the fix. This models that specific restriction, not the full game sandbox.
+
+After that fix, one continuous live run recorded 153 events over approximately 156 days: 29 created trips, 26 completions, one battle destruction, and two trips without recorded endings. The 71 KB archive had no malformed records or sequence gaps. This confirms live writing, automatic flush, reporting, and both automatic and native-test outcomes. The user explicitly confirmed that this was one run, with no cross-save testing. Recorder save/load compatibility and disabled-write behavior remain unverified in-game.
+
+A subsequent run recorded 283 events from Mar 3, c206 to Jan 8, c207 (about 311 recorded days): 55 automatic departures, 52 completions, one pirate shuttle destroyed by battle on Nov 1, and two unresolved trips. Completed trips averaged 9.52 days across 16 departure factions. Both archives together used 200,804 bytes, with no malformed records or sequence gaps. `SAVE_REQUEST` and `SAVE_SUCCESS` at the end confirm a live save hook cycle. This recording has a new campaign cursor with no parent run; there is no subsequent load linked to the saved cursor in the inspected data. It therefore does not establish recorder continuity across save/load or rollback. Both live runs used the build before the Luna-constructor and battle-detail fixes.
+
+That run exposed a second restriction: Luna startup used `java.lang.reflect.Constructor`, causing a fallback to JSON. Startup now instantiates the optional adapter in the enabled branch without reflection. A restricted-loader test reproduced the ignored Luna override before the fix and checks startup plus live callbacks; a separate test checks the same boundary without Luna jars. The recorded battle destruction lacked a battle callback. New battle tests cover direct/native casualties seen only in the global snapshot, both callback orders, repeat fights, missing evidence, enabling during an existing trip, and disabling collection. Retest Luna and detailed battle recording with the new build; the old run cannot establish either fix.
 
 1. Restart with the new jar and load a test save. `ls debug status` should show OFF with default settings.
 2. Enable **Record traffic history** in Luna settings → Living Sector → Debug and apply. Without LunaLib, use `ls debug on` for this session or enable `debugTrafficHistory` in the JSON settings before starting the game.

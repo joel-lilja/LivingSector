@@ -22,7 +22,7 @@ public final class TrafficMission {
 
     public final int schemaVersion = 1;
     public final String id, factionId;
-    public final TrafficPlan plan;
+    public TrafficPlan plan; // Replaceable only during saved-format migration; itinerary remains fixed.
     public final long seed;
     public final double createdAt;
     public final boolean test;
@@ -49,8 +49,9 @@ public final class TrafficMission {
         this.test = test;
         List<Stop> itinerary = new ArrayList<Stop>();
         itinerary.add(new Stop(plan.originId, Math.max(.01f, plan.boardingDays)));
-        itinerary.add(new Stop(plan.destinationId, 1f));
-        if (roundTrip) itinerary.add(new Stop(plan.originId, 1f));
+        float arrival = plan.arrivalDays > 0 ? plan.arrivalDays : 1f;
+        itinerary.add(new Stop(plan.destinationId, arrival));
+        if (roundTrip) itinerary.add(new Stop(plan.originId, arrival));
         stops = Collections.unmodifiableList(itinerary);
         note("admitted");
     }

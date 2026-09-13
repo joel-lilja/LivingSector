@@ -26,10 +26,38 @@ final class LunaIntegrationTests {
         suite.add("luna.invalidAndMissingValues", LunaIntegrationTests::invalidAndMissingValues);
         suite.add("luna.installedButDisabled", LunaIntegrationTests::installedButDisabled);
         suite.add("luna.recorderLiveToggle", LunaIntegrationTests::recorderLiveToggle);
+        suite.add("luna.startupWithoutReflection", LunaIntegrationTests::startupWithoutReflection);
+    }
+
+    private static void startupWithoutReflection() throws Exception {
+        World world = new World();
+        CommonDataJSONObject data = prepare(world);
+        data.put("ls_globalFleetLimit", 17);
+        try (ScriptRestrictionLoader loader = new ScriptRestrictionLoader()) {
+            Class<?> type = loader.loadClass("livingsector.LivingSectorPlugin");
+            com.fs.starfarer.api.BaseModPlugin plugin = (com.fs.starfarer.api.BaseModPlugin) type.getConstructor().newInstance();
+            plugin.onApplicationLoad();
+            Object settings = type.getMethod("settings").invoke(null);
+            check(settings.getClass().getField("globalFleetLimit").getInt(settings) == 17,
+                    "Luna overrides load through the reflection-restricted mod loader");
+            data.put("ls_globalFleetLimit", 23);
+            LunaSettings.reportSettingsChanged(LivingSectorPlugin.ID);
+            settings = type.getMethod("settings").invoke(null);
+            check(settings.getClass().getField("globalFleetLimit").getInt(settings) == 23,
+                    "Live Luna listener remains connected through the restricted loader");
+            // Do not leave a test-loader listener registered with the parent-loaded Luna singleton.
+            for (lunalib.lunaSettings.LunaSettingsListener listener : new java.util.ArrayList<lunalib.lunaSettings.LunaSettingsListener>(LunaSettings.getListeners$LunaLib())) {
+                if (listener.getClass().getClassLoader() == loader) LunaSettings.removeSettingsListener(listener);
+            }
+        }
     }
 
     private static CommonDataJSONObject prepare(World world) throws Exception {
         world.lunaEnabled = true;
+        // Luna deduplicates by class name, including across loaders. Isolate each scenario's bridge.
+        for (lunalib.lunaSettings.LunaSettingsListener listener : new java.util.ArrayList<lunalib.lunaSettings.LunaSettingsListener>(LunaSettings.getListeners$LunaLib())) {
+            if (listener.getClass().getName().equals(LunaSettingsBridge.class.getName())) LunaSettings.removeSettingsListener(listener);
+        }
         // Quiet expected missing-field/invalid-value diagnostics in this controlled fixture.
         com.fs.starfarer.api.Global.getLogger(LunaSettingsLoader.class).setLevel(org.apache.log4j.Level.OFF);
         LunaSettings.hasSettingsListenerOfClass(LunaSettingsBridge.class);
@@ -49,10 +77,10 @@ final class LunaIntegrationTests {
         World world = new World();
         CommonDataJSONObject data = prepare(world);
         JSONObject json = new JSONObject(new String(Files.readAllBytes(Paths.get("data/config/living_sector.json")), StandardCharsets.UTF_8));
-        check(data.length() == 21, "Luna parser found every supported setting");
+        check(data.length() == 28, "Luna parser found every supported setting");
         for (LunaSettingsData row : LunaSettingsLoader.getSettingsData()) {
             String key = row.getFieldID().substring(3);
-            Object fallback = key.startsWith("vip_") ? json.getJSONObject("vip").get(key.substring(4)) : json.get(key);
+            Object fallback = key.startsWith("civilian_") ? json.getJSONObject("civilian").get(key.substring(9)) : json.get(key);
             Object value = row.getDefaultValue();
             check(value instanceof Number ? Double.compare(((Number) value).doubleValue(), ((Number) fallback).doubleValue()) == 0
                     : value.equals(fallback), "Menu default agrees with JSON for " + key);
@@ -77,7 +105,7 @@ final class LunaIntegrationTests {
         check(policy.budget(SectorReader.capture(Collections.emptySet())).target > 0, "Existing VIP policy starts enabled");
         LivingSectorSettings previous = LivingSectorPlugin.settings();
         data.put("ls_enabled", false).put("ls_debugLogging", true).put("ls_globalFleetLimit", 1)
-                .put("ls_vip_enabled", false).put("ls_planningIntervalDays", 10d);
+                .put("ls_civilian_enabled", false).put("ls_planningIntervalDays", 10d);
         LunaSettings.reportSettingsChanged("some_other_mod");
         check(LivingSectorPlugin.settings() == previous, "Unrelated menu changes do not reload our config");
         LunaSettings.reportSettingsChanged(LivingSectorPlugin.ID);
@@ -110,7 +138,7 @@ final class LunaIntegrationTests {
         for (LunaSettingsData row : LunaSettingsLoader.getSettingsData()) {
             String key = row.getFieldID().substring(3);
             Object owner = LivingSectorPlugin.settings();
-            if (key.startsWith("vip_")) { owner = LivingSectorPlugin.settings().vip; key = key.substring(4); }
+            if (key.startsWith("civilian_")) { owner = LivingSectorPlugin.settings().civilian; key = key.substring(9); }
             Object value = owner.getClass().getField(key).get(owner);
             Object expected = data.get(row.getFieldID());
             check(value instanceof Number ? Math.abs(((Number) value).doubleValue() - ((Number) expected).doubleValue()) < .0001

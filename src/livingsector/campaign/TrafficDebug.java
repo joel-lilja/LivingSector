@@ -101,7 +101,11 @@ public final class TrafficDebug {
         return new StringBuilder(mission.id).append(" ").append(mission.state())
                 .append("; age=").append(round(day - mission.createdAt)).append("d; leg=").append(mission.leg() + 1)
                 .append('/').append(mission.stops.size()).append("; generation=").append(mission.generation())
-                .append("; fleet ID=").append(mission.fleetId()).append("; last fleet=").append(mission.lastFleetId());
+                .append("; fleet ID=").append(mission.fleetId()).append("; last fleet=").append(mission.lastFleetId())
+                .append("\n  type=").append(mission.plan.typeId).append("; faction=").append(mission.factionId)
+                .append("; itinerary=").append(mission.plan.originId).append(" -> ").append(mission.plan.destinationId)
+                .append(mission.stops.size() > 2 ? " -> " + mission.plan.originId : " (one way)")
+                .append("; legacy template variants=").append(mission.plan.variants);
     }
 
     private static StringBuilder appendHistory(StringBuilder out, TrafficMission mission) {
@@ -122,6 +126,10 @@ public final class TrafficDebug {
             if (route.getCurrent() != null) out.append("; segment days=").append(round(route.getCurrent().elapsed))
                     .append('/').append(round(route.getCurrent().daysMax));
         }
+        if (entry.budget != null) out.append("\n  Budget FP=").append(round(entry.budget.remaining))
+                .append("; initial FP=").append(round(entry.budget.initial))
+                .append("; accounted damage=").append(round(entry.budget.routeDamage))
+                .append("; physical starting FP=").append(round(entry.budget.physicalFP));
         CampaignFleetAPI fleet = NativeTraffic.fleet(entry);
         if (fleet != null) {
             out.append("\n  Current: PHYSICAL at ").append(fleet.getContainingLocation().getName())
@@ -133,12 +141,8 @@ public final class TrafficDebug {
                         .append("; CR=").append(round(member.getRepairTracker().getCR()));
             }
         } else {
-            out.append("\n  Current: ABSTRACT (normal native route); saved survivors=")
-                    .append(entry.checkpoint == null ? "not generated yet" : entry.checkpoint.ships.size());
-            if (entry.checkpoint != null) for (FleetCheckpoint.Ship ship : entry.checkpoint.ships) {
-                out.append("\n  saved ship ").append(ship.id).append("; hull=").append(round(ship.hull))
-                        .append("; CR=").append(round(ship.cr));
-            }
+            out.append("\n  Current: ABSTRACT (normal native route); ships regenerate within remaining budget");
+            if (entry.budget == null) out.append("; legacy state awaits migration");
         }
         return appendHistory(out, entry.mission).toString();
     }
@@ -194,7 +198,7 @@ public final class TrafficDebug {
             entry.mission.note("SYNTHETIC_DAMAGE", "synthetic hull/CR damage: " + ship.getId());
         }
         return "Injected test " + (removeShip ? "ship removal" : "damage") + " into " + id
-                + ". This checks persistence, not Nex's real battle callback. Native repairs may resume while physical.";
+                + ". Ship removal reduces the next generation budget; hull/CR may reset on regeneration. This is a synthetic test.";
     }
 
     public static String away(String id) {

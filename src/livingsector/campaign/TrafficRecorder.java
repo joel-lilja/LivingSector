@@ -22,6 +22,7 @@ final class TrafficRecorder {
     private final Map<String, TrafficJourney> direct = new LinkedHashMap<String, TrafficJourney>();
     private long nextFlush = System.nanoTime() + 30_000_000_000L;
     private boolean healthy = true;
+    private BattleHistory battles;
 
     static RotatingLog.Store store() {
         return new RotatingLog.Store() {
@@ -59,6 +60,7 @@ final class TrafficRecorder {
             event.put("modVersions", versions);
             write(event);
             flush();
+            if (healthy) battles = new BattleHistory(this);
         } catch (Exception ex) { fail(ex); }
     }
     boolean healthy() { return healthy; }
@@ -87,13 +89,37 @@ final class TrafficRecorder {
         nativeEvent(mission, created ? "CREATED" : "OBSERVED_EXISTING", created ? "admitted" : "recording began during this trip");
     }
     private void nativeEvent(TrafficMission mission, String kind, String detail) {
+        nativeEvent(mission, kind, detail, null, null);
+    }
+    private void nativeEvent(TrafficMission mission, String kind, String detail, JSONObject battle, String battleFleet) {
+        nativeEvent(mission, kind, detail, battle, battleFleet, null);
+    }
+    private void nativeEvent(TrafficMission mission, String kind, String detail, JSONObject battle, String battleFleet,
+                             org.json.JSONArray composition) {
         if (!healthy) return;
         try {
-            write(base(kind).put("trip", mission.id).put("executor", "native").put("type", mission.plan.typeId)
+            JSONObject event = base(kind).put("trip", mission.id).put("executor", "native").put("type", mission.plan.typeId)
                     .put("faction", mission.factionId).put("origin", mission.plan.originId).put("destination", mission.plan.destinationId)
                     .put("fleet", value(mission.fleetId() == null ? mission.lastFleetId() : mission.fleetId()))
                     .put("test", mission.test).put("state", mission.state().name()).put("leg", mission.leg() + 1)
-                    .put("generation", mission.generation()).put("detail", clipped(detail)));
+                    .put("generation", mission.generation()).put("detail", clipped(detail));
+            NativeMission entry = manager.nativeTraffic().active.get(mission.id);
+            if (entry != null && entry.budget != null) {
+                event.put("initialBudgetFP", entry.budget.initial).put("remainingBudgetFP", entry.budget.remaining)
+                        .put("accountedRouteDamage", entry.budget.routeDamage);
+                if (entry.debugPreviousFP != null) event.put("previousBudgetFP", entry.debugPreviousFP);
+            }
+            if (composition != null) event.put("composition", composition);
+            if ("CREATED".equals(kind) || "OBSERVED_EXISTING".equals(kind)) {
+                event.put("budget", mission.plan.budgetId()).put("roundTrip", mission.stops.size() > 2)
+                        .put("variants", new org.json.JSONArray(mission.plan.variants));
+                if (mission.plan.fleetRequest != null) event.put("requestedPassengerCapacity", mission.plan.fleetRequest.passengerCapacity);
+            }
+            if (battle != null) event.put("battle", battle).put("fleet", battleFleet);
+            write(event);
+            if (battles != null && (!mission.active() || "DEMATERIALIZED".equals(kind))) {
+                battles.retire(mission.lastFleetId(), "DESTROYED".equals(kind));
+            }
             if (!mission.active()) { missions.remove(mission.id); mission.setEventSink(null); }
         } catch (Exception ex) { fail(ex); }
     }
@@ -103,16 +129,23 @@ final class TrafficRecorder {
         journey.recorder = this;
         journey.debugOutcome = null;
         journey.debugMovement = null;
+        if (battles != null) battles.track(journey.fleet, detail -> directEvent(journey, "BATTLE", livingsector.debug.BattleDetails.summary(detail), detail));
         if (!journey.fleet.getEventListeners().contains(journey)) journey.fleet.addEventListener(journey);
         directEvent(journey, created ? "CREATED" : "OBSERVED_EXISTING", created ? "physical departure admitted" : "recording began during this trip");
     }
     void directEvent(TrafficJourney journey, String kind, String detail) {
+        directEvent(journey, kind, detail, null);
+    }
+    private void directEvent(TrafficJourney journey, String kind, String detail, JSONObject battle) {
         if (!healthy) return;
         try {
-            write(base(kind).put("trip", journey.historyId()).put("executor", "direct").put("type", journey.typeId)
+            JSONObject event = base(kind).put("trip", journey.historyId()).put("executor", "direct").put("type", journey.typeId)
                     .put("faction", journey.fleet.getFaction().getId()).put("origin", journey.originId).put("destination", journey.destinationId)
                     .put("fleet", journey.fleet.getId()).put("test", false)
-                    .put("state", journey.debugOutcome == null ? "ACTIVE" : journey.debugOutcome).put("detail", clipped(detail)));
+                    .put("state", journey.debugOutcome == null ? "ACTIVE" : journey.debugOutcome).put("detail", clipped(detail));
+            if (battle != null) event.put("battle", battle);
+            write(event);
+            if (battles != null && RecorderReport.terminal(kind)) battles.retire(journey.fleet.getId(), "DESTROYED".equals(kind));
         } catch (Exception ex) { fail(ex); }
     }
     void forget(TrafficJourney journey) {
@@ -120,6 +153,26 @@ final class TrafficRecorder {
         direct.remove(journey.historyId());
         journey.fleet.removeEventListener(journey);
         journey.recorder = null;
+        if (battles != null) battles.retire(journey.fleet.getId(), "DESTROYED".equals(journey.debugOutcome));
+    }
+    void trackBattleFleet(TrafficMission mission, CampaignFleetAPI fleet) {
+        if (healthy && battles != null && fleet != null) battles.track(fleet,
+                detail -> nativeEvent(mission, "BATTLE", livingsector.debug.BattleDetails.summary(detail), detail, fleet.getId()));
+    }
+    void materialized(NativeMission entry, CampaignFleetAPI fleet) {
+        if (!healthy) return;
+        try {
+            org.json.JSONArray ships = new org.json.JSONArray();
+            for (com.fs.starfarer.api.fleet.FleetMemberAPI member : fleet.getFleetData().getMembersListCopy()) {
+                ships.put(new JSONObject().put("ship", member.getId())
+                        .put("variant", member.getVariant().getHullVariantId()).put("fp", member.getFleetPointCost()));
+            }
+            nativeEvent(entry.mission, "FLEET_COMPOSITION", "generated ships; identity changes are not battle casualties",
+                    null, null, ships);
+        } catch (Exception ex) { fail(ex); }
+    }
+    void battle(CampaignFleetAPI fleet, CampaignFleetAPI winner, com.fs.starfarer.api.campaign.BattleAPI battle) {
+        if (battles != null) battles.reportBattleOccurred(fleet, winner, battle);
     }
     void observe(NativeMission entry) {
         if (!healthy) return;
@@ -136,6 +189,7 @@ final class TrafficRecorder {
                 + "; assignment=" + (fleet.getCurrentAssignment() == null ? "none" : fleet.getCurrentAssignment().getAssignment());
     }
     void advance() {
+        if (battles != null) battles.advance();
         if (healthy && System.nanoTime() >= nextFlush) flush();
     }
     void flush() {
@@ -148,25 +202,48 @@ final class TrafficRecorder {
         try { write(base("SETTINGS_CHANGED").put("effectiveSettings", settingsSnapshot()).put("detail", "configuration applied")); }
         catch (Exception ex) { fail(ex); }
     }
-    private static JSONObject settingsSnapshot() throws Exception {
+    private static JSONObject settingsSnapshot() throws org.json.JSONException {
+        // Starsector's script loader forbids java.lang.reflect.Field, even for public settings.
+        // Read the effective values explicitly so Luna overrides are still recorded.
         livingsector.LivingSectorSettings settings = livingsector.LivingSectorPlugin.settings();
-        JSONObject effective = new JSONObject(), vip = new JSONObject();
-        for (java.lang.reflect.Field field : settings.getClass().getFields()) {
-            if (!field.getName().equals("vip")) effective.put(field.getName(), field.get(settings));
-        }
-        for (java.lang.reflect.Field field : settings.vip.getClass().getFields()) vip.put(field.getName(), field.get(settings.vip));
-        return effective.put("vip", vip);
+        livingsector.traffic.VipTrafficPolicy.Config vip = settings.vip;
+        livingsector.traffic.CivilianTrafficPolicy.Config c = settings.civilian;
+        return new JSONObject()
+                .put("enabled", settings.enabled).put("debugLogging", settings.debugLogging)
+                .put("useNativeRoutes", settings.useNativeRoutes)
+                .put("debugTrafficHistory", settings.debugTrafficHistory).put("debugHistoryMiB", settings.debugHistoryMiB)
+                .put("globalFleetLimit", settings.globalFleetLimit)
+                .put("planningIntervalDays", settings.planningIntervalDays).put("maintenanceIntervalDays", settings.maintenanceIntervalDays)
+                .put("civilian", new JSONObject().put("enabled", c.enabled).put("includeStations", c.includeStations)
+                        .put("localEnabled", c.localEnabled).put("linerEnabled", c.linerEnabled).put("charterEnabled", c.charterEnabled)
+                        .put("minimumMarketSize", c.minimumMarketSize).put("hardLimit", c.hardLimit)
+                        .put("baseTarget", c.baseTarget).put("marketsPerAdditionalFleet", c.marketsPerAdditionalFleet)
+                        .put("maximumTarget", c.maximumTarget).put("targetVariation", c.targetVariation)
+                        .put("targetRerollDays", c.targetRerollDays).put("dailySpawnChance", c.dailySpawnChance)
+                        .put("originCooldownDays", c.originCooldownDays).put("localWeight", c.localWeight)
+                        .put("linerWeight", c.linerWeight).put("charterWeight", c.charterWeight)
+                        .put("homeFactionPreference", c.homeFactionPreference).put("localReturnChance", c.localReturnChance)
+                        .put("linerReturnChance", c.linerReturnChance).put("charterReturnChance", c.charterReturnChance))
+                .put("vip", new JSONObject()
+                        .put("enabled", vip.enabled).put("includeStations", vip.includeStations)
+                        .put("minimumMarketSize", vip.minimumMarketSize).put("hardLimit", vip.hardLimit)
+                        .put("baseTarget", vip.baseTarget).put("marketsPerAdditionalFleet", vip.marketsPerAdditionalFleet)
+                        .put("maximumTarget", vip.maximumTarget).put("targetVariation", vip.targetVariation)
+                        .put("targetRerollDays", vip.targetRerollDays).put("dailySpawnChance", vip.dailySpawnChance)
+                        .put("originCooldownDays", vip.originCooldownDays).put("maximumTripDays", vip.maximumTripDays)
+                        .put("boardingDays", vip.boardingDays).put("variant", vip.variant));
     }
     void close() {
         flush();
         healthy = false;
+        if (battles != null) { battles.close(); battles = null; }
         for (TrafficMission mission : missions.values()) mission.setEventSink(null);
         missions.clear();
         for (TrafficJourney journey : direct.values()) { journey.fleet.removeEventListener(journey); journey.recorder = null; }
         direct.clear();
         if (current == this) current = null;
     }
-    private void fail(Exception ex) {
+    void fail(Exception ex) {
         healthy = false;
         manager.recorderFailure(ex.getMessage());
         // Do not mutate fleet listener collections while a callback may be dispatching.

@@ -36,7 +36,7 @@ final class CampaignFixture {
         Field settings = LivingSectorPlugin.class.getDeclaredField("settings");
         settings.setAccessible(true);
         settings.set(null, new LivingSectorSettings());
-        for (String name : new String[]{"vipPolicy", "refreshOptionalSettings"}) {
+        for (String name : new String[]{"civilianPolicy", "refreshOptionalSettings"}) {
             Field field = LivingSectorPlugin.class.getDeclaredField(name);
             field.setAccessible(true);
             field.set(null, null);
@@ -54,6 +54,14 @@ final class CampaignFixture {
         return new AssertionError("Fixture needs an explicit model for " + api + "." + method);
     }
     static final class TestRoutes extends NexRouteManager {
+        boolean forbidMembershipScan;
+        @Override public List<RouteData> getRoutesForSource(String source) {
+            List<RouteData> routes = super.getRoutesForSource(source);
+            if (!forbidMembershipScan) return routes;
+            return new ArrayList<RouteData>(routes) {
+                @Override public boolean contains(Object value) { throw new AssertionError("Repeated linear route membership scan"); }
+            };
+        }
         @Override public void spawnAndDespawn() { /* Sensors are outside this fixture; scenarios drive native hooks. */ }
     }
     interface Answer { Object get(String name, Object[] args) throws Exception; }
@@ -106,6 +114,11 @@ final class CampaignFixture {
         final Map<FleetMemberAPI, FakeShip> ships = new IdentityHashMap<FleetMemberAPI, FakeShip>();
         final Map<CampaignFleetAPI, FakeFleet> fleetObjects = new IdentityHashMap<CampaignFleetAPI, FakeFleet>();
         final Map<String, MarketAPI> markets = new LinkedHashMap<String, MarketAPI>();
+        final Map<String, FactionAPI> factionOverrides = new HashMap<String, FactionAPI>();
+        final Map<String, ShipVariantAPI> variantSpecs = new HashMap<String, ShipVariantAPI>();
+        final Map<String, Map<String, List<String>>> rolePools = new HashMap<String, Map<String, List<String>>>();
+        int rolePicks;
+        int listenerReads;
         final MemoryAPI memory = memory();
         final FactionAPI faction = faction("a"), enemy = faction("pirates");
         final StarSystemAPI system;
@@ -122,6 +135,10 @@ final class CampaignFixture {
         RouteData lastRoute;
 
         World() {
+            com.fs.starfarer.api.combat.ShipHullSpecAPI hull = proxy(com.fs.starfarer.api.combat.ShipHullSpecAPI.class,
+                    (m, a) -> m.equals("getFleetPoints") ? 3 : null);
+            variantSpecs.put("mudskipper_Standard", proxy(ShipVariantAPI.class, (m, a) ->
+                    m.equals("getHullSpec") ? hull : m.equals("getHullVariantId") ? "mudskipper_Standard" : null));
             system = proxy(StarSystemAPI.class, (method, args) -> {
                 if (method.equals("getFleets")) return fleets;
                 if (method.equals("getJumpPoints")) return Collections.singletonList(proxy(JumpPointAPI.class, (m, a) -> null));
@@ -216,7 +233,7 @@ final class CampaignFixture {
                     }));
                     throw unmodeled("ModManagerAPI", n);
                 });
-                if (m.equals("getVariant")) return proxy(ShipVariantAPI.class, (n, v) -> null);
+                if (m.equals("getVariant")) return variantSpecs.containsKey(a[0]) ? variantSpecs.get(a[0]) : proxy(ShipVariantAPI.class, (n, v) -> null);
                 if (m.equals("loadJSON") && "data/config/living_sector.json".equals(a[0])) {
                     configReads++;
                     try { return new JSONObject(new String(Files.readAllBytes(Paths.get((String) a[0])), StandardCharsets.UTF_8)); }
@@ -244,7 +261,7 @@ final class CampaignFixture {
                     case "getCurrentLocation": return currentLocation;
                     case "setCurrentLocation": currentLocation = (LocationAPI) a[0]; return null;
                     case "isPaused": return paused;
-                    case "getFaction": return "a".equals(a[0]) ? faction : enemy;
+                    case "getFaction": return factionOverrides.containsKey(a[0]) ? factionOverrides.get(a[0]) : "a".equals(a[0]) ? faction : enemy;
                     default: throw unmodeled("SectorAPI", m);
                 }
             }));
@@ -255,7 +272,8 @@ final class CampaignFixture {
                     created.add(fleet);
                     return fleet.api;
                 }
-                if (m.equals("createFleetMember")) return new FakeShip(this, "ship-" + ++shipSequence).api;
+                if (m.equals("createFleetMember")) return new FakeShip(this, "ship-" + ++shipSequence,
+                        a[1] instanceof ShipVariantAPI ? (ShipVariantAPI) a[1] : variantSpecs.get(a[1])).api;
                 return null;
             }));
             routes = new TestRoutes();
@@ -316,6 +334,17 @@ final class CampaignFixture {
                 if (m.equals("getId")) return id;
                 if (m.equals("getFleetTypeName")) return "Test Fleet";
                 if (m.equals("isHostileTo")) return war;
+                if (m.equals("pickShip")) {
+                    rolePicks++;
+                    if (!((FactionAPI.ShipPickParams) a[1]).blockFallback) throw new AssertionError("Role selection must block foreign fallbacks");
+                    Map<String, List<String>> roles = rolePools.get(id);
+                    List<String> candidates = roles == null ? null : roles.get(a[0]);
+                    List<ShipRolePick> picks = new ArrayList<ShipRolePick>();
+                    if (candidates != null) for (String variant : candidates) {
+                        if (((ShipFilter) a[2]).isAvailable(variant)) picks.add(new ShipRolePick(variant));
+                    }
+                    return picks.isEmpty() ? picks : Collections.singletonList(picks.get(((Random) a[3]).nextInt(picks.size())));
+                }
                 return null;
             });
         }
@@ -355,9 +384,12 @@ final class CampaignFixture {
         boolean mothballed, flagship;
         final FleetMemberAPI api;
         FakeShip(World world, String id) {
+            this(world, id, null);
+        }
+        FakeShip(World world, String id, ShipVariantAPI supplied) {
             this.id = id;
             ShipVariantAPI[] variant = {null};
-            variant[0] = proxy(ShipVariantAPI.class, (m, a) -> m.equals("clone") ? variant[0] : null);
+            variant[0] = supplied != null ? supplied : proxy(ShipVariantAPI.class, (m, a) -> m.equals("clone") ? variant[0] : null);
             RepairTrackerAPI repair = proxy(RepairTrackerAPI.class, (m, a) -> {
                 if (m.equals("getBaseCR") || m.equals("getCR")) return cr;
                 if (m.equals("getMaxCR")) return .7f;
@@ -380,7 +412,8 @@ final class CampaignFixture {
                     case "getStatus": return status;
                     case "getRepairTracker": return repair;
                     case "getMinCrew": return 1f;
-                    case "getFleetPointCost": return 3;
+                    case "getFleetPointCost": return supplied != null && supplied.getHullSpec() != null
+                            ? (int) supplied.getHullSpec().getFleetPoints() : 3;
                     case "isMothballed": return mothballed;
                     case "isFlagship": return flagship;
                     default: break;
@@ -391,6 +424,36 @@ final class CampaignFixture {
         }
     }
 
+    static final class FakeCargo {
+        final Map<String, Float> quantities = new LinkedHashMap<String, Float>();
+        final CargoAPI api = proxy(CargoAPI.class, (m, a) -> {
+            if (m.equals("createCopy")) { FakeCargo copy = new FakeCargo(); copy.quantities.putAll(quantities); return copy.api; }
+            if (m.equals("getStacksCopy")) {
+                List<CargoStackAPI> stacks = new ArrayList<CargoStackAPI>();
+                for (Map.Entry<String, Float> item : quantities.entrySet()) {
+                    String id = item.getKey(); float amount = item.getValue();
+                    stacks.add(proxy(CargoStackAPI.class, (n, v) -> n.equals("getType") ? CargoAPI.CargoItemType.RESOURCES
+                            : n.equals("getData") ? id : n.equals("getSize") ? amount : null));
+                }
+                return stacks;
+            }
+            if (m.equals("clear")) quantities.clear();
+            if (m.equals("addAll")) for (CargoStackAPI stack : ((CargoAPI) a[0]).getStacksCopy()) {
+                String id = (String) stack.getData(); quantities.put(id, quantities.getOrDefault(id, 0f) + stack.getSize());
+            }
+            if (m.equals("removeItems")) {
+                String id = (String) a[1]; quantities.put(id, Math.max(0, quantities.getOrDefault(id, 0f) - ((Number) a[2]).floatValue()));
+                return true;
+            }
+            if (m.equals("addCrew") || m.equals("addFuel") || m.equals("addSupplies")) {
+                String id = m.equals("addCrew") ? "crew" : m.equals("addFuel") ? "fuel" : "supplies";
+                quantities.put(id, quantities.getOrDefault(id, 0f) + ((Number) a[0]).floatValue());
+            }
+            if (m.equals("getCommodityQuantity")) return quantities.getOrDefault(a[0], 0f);
+            return null;
+        });
+    }
+
     static final class FakeFleet {
         final String id;
         boolean alive = true, inBattle;
@@ -399,6 +462,7 @@ final class CampaignFixture {
         final List<FleetEventListener> listeners = new ArrayList<FleetEventListener>();
         final MemoryAPI memory = memory();
         final CampaignFleetAPI api;
+        final FakeCargo cargo = new FakeCargo();
         FleetAssignment assigned;
         LocationAPI location;
         final Vector2f position = new Vector2f(3000, 0);
@@ -406,13 +470,11 @@ final class CampaignFixture {
         FakeFleet(World world, String id) {
             this.id = id;
             location = world.system;
-            CargoAPI cargoCopy = proxy(CargoAPI.class, (m, a) -> null);
-            CargoAPI cargo = proxy(CargoAPI.class, (m, a) -> m.equals("createCopy") ? cargoCopy : null);
             FleetDataAPI data = proxy(FleetDataAPI.class, (m, a) -> {
                 if (m.equals("getMembersListCopy")) return new ArrayList<FleetMemberAPI>(members);
                 if (m.equals("getSnapshot")) return new ArrayList<FleetMemberAPI>(snapshot);
                 if (m.equals("addFleetMember")) {
-                    FleetMemberAPI member = a[0] instanceof String ? new FakeShip(world, "ship-" + ++world.shipSequence).api : (FleetMemberAPI) a[0];
+                    FleetMemberAPI member = a[0] instanceof String ? new FakeShip(world, "ship-" + ++world.shipSequence, world.variantSpecs.get(a[0])).api : (FleetMemberAPI) a[0];
                     members.add(member); return member;
                 }
                 if (m.equals("removeFleetMember")) members.remove(a[0]);
@@ -426,18 +488,18 @@ final class CampaignFixture {
                     case "isEmpty": return members.isEmpty();
                     case "getBattle": return inBattle ? proxy(BattleAPI.class, (n, v) -> null) : null;
                     case "getFleetData": return data;
-                    case "getCargo": return cargo;
+                    case "getCargo": return cargo.api;
                     case "getMemoryWithoutUpdate": return memory;
                     case "getFaction": return world.faction;
                     case "getAI": return ai;
                     case "getContainingLocation": return location;
                     case "getLocation": case "getLocationInHyperspace": return position;
                     case "setLocation": position.set((Float) a[0], (Float) a[1]); break;
-                    case "getFleetPoints": return members.size() * 3;
+                    case "getFleetPoints": { int fp = 0; for (FleetMemberAPI member : members) fp += member.getFleetPointCost(); return fp; }
                     case "getEffectiveStrength": return 100f;
                     case "addEventListener": listeners.add((FleetEventListener) a[0]); break;
                     case "removeEventListener": listeners.remove(a[0]); break;
-                    case "getEventListeners": return listeners;
+                    case "getEventListeners": world.listenerReads++; return listeners;
                     case "despawn": despawn((FleetDespawnReason) a[0], a[1]); break;
                     case "clearAssignments": assigned = null; break;
                     case "addAssignment": assigned = (FleetAssignment) a[0]; break;

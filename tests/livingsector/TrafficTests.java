@@ -31,6 +31,8 @@ public final class TrafficTests {
         populationSimulation();
         extensionPolicy();
         TrafficBehaviorTests.run();
+        CivilianTrafficTests.run();
+        FleetBudgetTests.run();
         MissionTests.run();
         System.out.println("PASS: " + checks + " traffic assertions");
     }

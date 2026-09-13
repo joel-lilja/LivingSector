@@ -3,20 +3,27 @@ ls_enabled,Enable automatic traffic,Boolean,true,,Allow new departures. Existing
 ls_globalFleetLimit,Global traffic limit,Int,40,,Maximum active Living Sector trips. Lowering this does not delete existing fleets.,1,200,General
 ls_planningIntervalDays,Planning interval (days),Double,5,,How often to consider new departures. Longer intervals reduce scanning and maximum traffic throughput.,1,30,General
 ls_maintenanceIntervalDays,Maintenance interval (days),Double,2,,How often to check safety and cleanup. Longer intervals delay responses to war or lost ports.,1,30,General
-ls_vip_enabled,Enable VIP departures,Boolean,true,,Allow new VIP shuttle trips.,,,VIP Traffic
-ls_vip_includeStations,Include stations,Boolean,true,,Include inhabited stations as VIP endpoints alongside planets.,,,VIP Traffic
-ls_vip_minimumMarketSize,Minimum market size,Int,3,,Smallest eligible inhabited market.,3,10,VIP Traffic
-ls_vip_dailySpawnChance,Daily departure chance,Double,0.35,,Probability before crowding and cooldowns. Converted to the configured planning interval.,0,1,VIP Traffic
-ls_vip_hardLimit,VIP traffic limit,Int,30,,Maximum active VIP trips. Existing fleets are not deleted when this is reduced.,1,200,VIP Traffic
-ls_vip_originCooldownDays,Origin cooldown (days),Double,10,,Minimum time between successful departures from the same port.,0,365,VIP Traffic
-ls_vip_baseTarget,Base crowding target,Double,2,,Base value used to reduce departure probability as traffic increases. This is not a population quota.,0,100,Advanced
-ls_vip_marketsPerAdditionalFleet,Markets per additional target fleet,Double,12,,Number of eligible planets and stations per extra target fleet.,1,100,Advanced
-ls_vip_maximumTarget,Maximum base crowding target,Double,20,,Upper bound before random target variation.,1,200,Advanced
-ls_vip_targetVariation,Target variation,Double,0.25,,Random proportional variation. 0.25 means up to 25 percent above or below the base target.,0,1,Advanced
-ls_vip_targetRerollDays,Target reroll interval (days),Double,25,,How often to reroll the crowding target.,1,365,Advanced
-ls_vip_maximumTripDays,Maximum trip duration (days),Double,180,,Lifetime for newly created trips. Existing trips retain their original limit.,31,3650,Advanced
-ls_vip_boardingDays,Boarding time (days),Double,0.5,,Boarding duration for new automatic VIP trips.,0,30,Advanced
-ls_useNativeRoutes,Experimental native routes,Boolean,false,,Use the experimental executor for new automatic trips. Existing trips retain their executor. Explicit console tests always use native routes.,,,Debug
+ls_civilian_enabled,Enable civilian departures,Boolean,true,,Allow new passenger and charter trips. Existing trips continue when disabled.,,,Civilian Traffic
+ls_civilian_includeStations,Include stations,Boolean,true,,Include inhabited stations alongside planets.,,,Civilian Traffic
+ls_civilian_minimumMarketSize,Minimum market size,Int,3,,Smallest eligible inhabited market.,3,10,Civilian Traffic
+ls_civilian_dailySpawnChance,Daily departure chance,Double,0.35,,One shared departure probability before crowding and cooldowns. Not a separate allowance per type.,0,1,Civilian Traffic
+ls_civilian_hardLimit,Civilian traffic limit,Int,30,,Maximum active civilian trips including existing VIPs. Lowering this does not delete fleets.,1,200,Civilian Traffic
+ls_civilian_originCooldownDays,Origin cooldown (days),Double,10,,Minimum time between civilian departures from the same port across all types.,0,365,Civilian Traffic
+ls_civilian_localEnabled,Local passenger shuttles,Boolean,true,,Small passenger fleets travelling within a system.,,,Civilian Traffic
+ls_civilian_linerEnabled,Interstellar liners,Boolean,true,,Larger passenger fleets travelling between systems.,,,Civilian Traffic
+ls_civilian_charterEnabled,Private charters,Boolean,true,,Small irregular trips within or between systems.,,,Civilian Traffic
+ls_civilian_localReturnChance,Shuttle return chance,Double,0.35,,Chance a new shuttle unloads and returns to its origin. Otherwise it finishes at its destination.,0,1,Civilian Traffic
+ls_civilian_linerReturnChance,Liner return chance,Double,0.5,,Chance a new liner unloads and returns to its origin.,0,1,Civilian Traffic
+ls_civilian_charterReturnChance,Charter return chance,Double,0.25,,Chance a new charter unloads and returns to its origin.,0,1,Civilian Traffic
+ls_civilian_homeFactionPreference,Home faction ship preference,Double,0.65,,Chance to try the operator's passenger ship roster before Independents. An empty pool falls back to the other.,0,1,Advanced
+ls_civilian_localWeight,Local shuttle selection weight,Double,5,,Relative chance to propose a shuttle when a departure is possible. Zero disables proposals.,0,100,Advanced
+ls_civilian_linerWeight,Liner selection weight,Double,3,,Relative chance to propose a liner. Types without a valid route yield to the others.,0,100,Advanced
+ls_civilian_charterWeight,Charter selection weight,Double,2,,Relative chance to propose a charter.,0,100,Advanced
+ls_civilian_baseTarget,Base crowding target,Double,2,,Reduces departure probability as traffic increases. This is not a population quota.,0,100,Advanced
+ls_civilian_marketsPerAdditionalFleet,Markets per additional target fleet,Double,12,,Number of eligible planets and stations per extra target fleet.,1,100,Advanced
+ls_civilian_maximumTarget,Maximum base crowding target,Double,20,,Upper bound before random target variation.,1,200,Advanced
+ls_civilian_targetVariation,Target variation,Double,0.25,,Random proportional variation. 0.25 means up to 25 percent above or below the base target.,0,1,Advanced
+ls_civilian_targetRerollDays,Target reroll interval (days),Double,25,,How often to reroll the shared crowding target.,1,365,Advanced
 ls_debugLogging,Basic debug logging,Boolean,false,,Log basic automatic spawns and diversions to starsector.log. Independent of the rotating traffic recorder.,,,Debug
 ls_debugTrafficHistory,Record traffic history,Boolean,false,,Optional long-run event recorder. Buffered JSONL files rotate across all saves. Off disables collection and writes.,,,Debug
 ls_debugHistoryMiB,Recorder disk allowance (MiB),Int,32,,Shared allowance for all recorder runs. Oldest files rotate out. A reduction while off applies when recording next starts.,8,128,Debug

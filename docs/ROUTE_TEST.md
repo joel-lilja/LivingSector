@@ -60,9 +60,9 @@ ls roundtrip
 
 Visit the printed ID. Expected itinerary: origin → destination visit → origin → completion. Arriving at the intermediate port must not despawn the fleet as a completed trip. The route uses native movement and passive civilian visits.
 
-## Distance despawn and survivors
+## Distance despawn and budgeted regeneration
 
-Use a dedicated checkpoint test:
+Use the long-lived test itinerary (the command retains its original name):
 
 ```text
 ls checkpoint
@@ -78,19 +78,18 @@ ls status <id>
 ls away <id>
 ```
 
-`lose` removes one test ship. `damage` sets the remaining test ship to 50% hull and 40% base CR. They work only on explicit test missions outside battle. These are synthetic persistence tests; they do not prove Nex's real battle callback.
+`lose` removes one test ship. `damage` sets the remaining test ship to 50% hull and 40% base CR. They work only on explicit test missions outside battle. Ship removal should reduce the budget; hull/CR can reset on regeneration. These are synthetic tests; they do not prove Nex's real battle callback.
 
 `away` teleports the player 12 LY from the trip. Unpause and check status until `ABSTRACT` appears. A fleet recently observed by the player can remain physical for roughly 30 days under the installed native rules; Nex operations can also retain it. No thresholds or force-spawn flags are changed. A short ordinary trip can complete before dematerializing, which is why this test has a long boarding period.
 
-Record the saved survivor ID and condition shown by abstract status, then:
+Record the remaining budget and accounted damage shown by abstract status, then:
 
 ```text
 ls verify <id>
 ls visit <id>
 ```
 
-Unpause, then repeat status/verify. Expected: generation increased, a new fleet ID, the same surviving ship ID, and no restored lost ship. Compare condition with the recorded checkpoint. Native repairs can occur while the fleet is physical, including during its retention period; condition need not remain equal to the original injected damage indefinitely.
-
+Unpause, then repeat status/verify. Expected: generation increased, a new physical fleet with new ship IDs, and a fleet fitting the reduced allowance. Exact hull/CR and cargo may reset to generation defaults. Repeated away/visit cycles with no further casualties must not refill or gradually shrink the allowance.
 Save/reload while abstract as well as physical. A real battle/distance-despawn cycle is an additional test for actual battle-loss propagation.
 
 ## Measuring military distraction

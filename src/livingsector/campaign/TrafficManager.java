@@ -118,8 +118,10 @@ public final class TrafficManager implements EveryFrameScript {
         if (activeCount() >= settings.globalFleetLimit) return;
         List<TrafficPolicy> policies = TrafficRegistry.policies();
         for (Iterator<TrafficPolicy> iterator = policies.iterator(); iterator.hasNext();) {
-            Double retry = retryAfter.get(iterator.next().getId());
-            if (retry != null && day < retry) iterator.remove();
+            TrafficPolicy policy = iterator.next();
+            Double retry = retryAfter.get(policy.getId());
+            if (!policy.enabled() || (policy.requiresNativeRoutes() && !NativeTraffic.available())
+                    || (retry != null && day < retry)) iterator.remove();
         }
         if (policies.isEmpty()) return;
         planningPasses++;
@@ -133,9 +135,9 @@ public final class TrafficManager implements EveryFrameScript {
                 TrafficPlan plan = scheduler.evaluate(policy, snapshot.get(), active, day,
                         settings.planningIntervalDays, random);
                 if (plan == null) continue;
-                if (settings.useNativeRoutes) {
-                    nativeTraffic().start(plan, day, random.nextLong(), false, false);
-                    active.add(new TrafficContext.Route(plan.typeId, plan.originId, plan.destinationId));
+                if (plan.nativeRoute || settings.useNativeRoutes) {
+                    if (nativeTraffic().start(plan, day, random.nextLong(), plan.roundTrip, false) == null) continue;
+                    active.add(new TrafficContext.Route(plan.typeId, plan.originId, plan.destinationId, plan.roundTrip));
                 } else {
                     CampaignFleetAPI fleet = CivilianFleetFactory.spawn(plan, random);
                     if (fleet == null) continue;
@@ -147,7 +149,7 @@ public final class TrafficManager implements EveryFrameScript {
                 scheduler.recordDeparture(plan, day);
                 spawned++;
                 debug("Spawned " + plan.typeId + ": " + plan.originId + " -> " + plan.destinationId
-                        + "; active=" + activeCount() + "; target=" + scheduler.target(plan.typeId));
+                        + "; active=" + activeCount() + "; target=" + scheduler.target(plan.budgetId()));
             } catch (RuntimeException ex) {
                 retryAfter.put(policy.getId(), day + 30);
                 Global.getLogger(TrafficManager.class).error("Living Sector policy failed: "
@@ -173,6 +175,9 @@ public final class TrafficManager implements EveryFrameScript {
         if (previous.vip.targetVariation != current.vip.targetVariation
                 || previous.vip.targetRerollDays != current.vip.targetRerollDays
                 || previous.vip.hardLimit != current.vip.hardLimit) scheduler.invalidateTarget("vip");
+        if (previous.civilian.targetVariation != current.civilian.targetVariation
+                || previous.civilian.targetRerollDays != current.civilian.targetRerollDays
+                || previous.civilian.hardLimit != current.civilian.hardLimit) scheduler.invalidateTarget("civilian");
         recorderOverride = null;
         if (loaded) updateRecorder("SETTINGS_CHANGED");
     }
@@ -199,6 +204,7 @@ public final class TrafficManager implements EveryFrameScript {
             if (nativeTraffic != null) for (NativeMission entry : nativeTraffic.active.values()) {
                 entry.debugSegment = null; entry.debugMovement = null;
                 recorder.attach(entry.mission, false);
+                recorder.trackBattleFleet(entry.mission, NativeTraffic.fleet(entry));
             }
         } catch (Exception ex) {
             recorderError = ex.getMessage();
@@ -220,7 +226,7 @@ public final class TrafficManager implements EveryFrameScript {
         if ("status".equals(action)) return recorderStatus();
         if ("flush".equals(action)) { if (recorder != null) recorder.flush(); return recorderStatus(); }
         if (recorder != null) recorder.flush();
-        if ("export".equals(action)) return recorderStatus() + "\nStructured export is already in saves/common/living-sector-debug/slot-*.jsonl."
+        if ("export".equals(action)) return recorderStatus() + "\nStructured export is already in saves/common/living-sector-debug/slot-*.jsonl.data."
                 + " Copy those files before they rotate; no duplicate export files are created outside the disk allowance.";
         if (!"summary".equals(action) && !"trip".equals(action) && !"runs".equals(action)) throw new IllegalArgumentException("Unknown recorder action");
         try { return TrafficRecorder.report(recorderState, day, LivingSectorPlugin.settings().debugHistoryMiB, action, window, id); }
@@ -278,6 +284,9 @@ public final class TrafficManager implements EveryFrameScript {
             for (TrafficPolicy policy : TrafficRegistry.policies()) {
                 out.append("; ").append(policy.getId()).append(" target=")
                         .append(Math.round(manager.scheduler.target(policy.getId()) * 10) / 10.0);
+                if (policy.enabled() && policy.requiresNativeRoutes() && !NativeTraffic.available()) {
+                    out.append("; civilian departures waiting for Nex route manager (save/load a fresh sector)");
+                }
             }
             for (TrafficJourney journey : manager.journeys) {
                 CampaignFleetAPI fleet = journey.fleet;
